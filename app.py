@@ -95,27 +95,37 @@ def capture_regional_images(target_url):
     return captured_data
 
 def sync_to_airtable(data_list):
-    """Sends all captured images to Airtable as new records including the capture date and Cloudinary URL."""
+    """Sends all captured images to Airtable as a single consolidated record."""
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {
         "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
         "Content-Type": "application/json"
     }
     
-    records = []
-    for item in data_list:
-        records.append({
-            "fields": {
-                "Region": item["region"], 
-                "Attachments": [{"url": item["url"]}],
-                "Cloudinary URL": item["url"], # New field added here
-                "Date": item["date"]  # Ensure this field (Date type) exists in Airtable
-            }
-        })
+    if not data_list:
+        return None
 
-    response = requests.post(url, headers=headers, json={"records": records})
+    # Consolidate all data into one record
+    all_attachments = [{"url": item["url"]} for item in data_list]
+    all_urls_text = "\n".join([f"{item['region']}: {item['url']}" for item in data_list])
+    capture_date = data_list[0]["date"]
+    
+    payload = {
+        "records": [
+            {
+                "fields": {
+                    "Region": "All Regions Consolidated", 
+                    "Attachments": all_attachments,
+                    "Cloudinary URL": all_urls_text, 
+                    "Date": capture_date
+                }
+            }
+        ]
+    }
+
+    response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        st.success(f"🎉 Successfully created {len(records)} records in Airtable!")
+        st.success(f"🎉 Successfully created one consolidated record in Airtable!")
     else:
         st.error(f"❌ Airtable Sync Error: {response.text}")
     return response.json()
