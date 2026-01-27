@@ -32,6 +32,7 @@ def capture_regional_images(target_url):
     regions = ["Asia", "Europe", "LATAM", "Canada", "All Regions"]
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
+    header_title = "Consolidated Report"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -42,6 +43,18 @@ def capture_regional_images(target_url):
         st.info("🔗 Connecting to Airtable Interface...")
         page.goto(target_url, wait_until="load")
         page.wait_for_timeout(7000) 
+
+        # Extract Header Text (Everything before the '|')
+        try:
+            # Airtable interfaces usually have the title in an h1 or specific header class
+            # We look for a header element and parse the text
+            raw_header = page.locator('h1, .interfaceTitle, [data-testid="interface-title"]').first.inner_text()
+            if "|" in raw_header:
+                header_title = raw_header.split("|")[0].strip()
+            else:
+                header_title = raw_header.strip()
+        except Exception as e:
+            st.warning(f"Could not parse header title: {e}")
 
         for region in regions:
             status_placeholder = st.empty()
@@ -84,7 +97,8 @@ def capture_regional_images(target_url):
                     "region": region,
                     "url": upload_res["secure_url"],
                     "local_file": filename,
-                    "date": capture_date
+                    "date": capture_date,
+                    "header_id": header_title
                 })
                 status_placeholder.write(f"✅ **{region}** captured.")
                 
@@ -109,12 +123,13 @@ def sync_to_airtable(data_list):
     all_attachments = [{"url": item["url"]} for item in data_list]
     all_urls_text = "\n".join([f"{item['region']}: {item['url']}" for item in data_list])
     capture_date = data_list[0]["date"]
+    header_id = data_list[0].get("header_id", "Consolidated Report")
     
     payload = {
         "records": [
             {
                 "fields": {
-                    "Region": "All Regions Consolidated", 
+                    "Type": header_id, 
                     "Attachments": all_attachments,
                     "Cloudinary URL": all_urls_text, 
                     "Date": capture_date
