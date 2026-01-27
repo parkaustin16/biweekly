@@ -1,5 +1,5 @@
-streamlit
-playwright
+streamlit>=1.28.0
+playwright>=1.40.0
 libnss3
 libatk1.0-0
 libatk-bridge2.0-0
