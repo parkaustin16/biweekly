@@ -36,53 +36,43 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Increased height to 2700 to comfortably render the 2500px capture
+        # 800x2700 viewport for the 2500 capture
         context = browser.new_context(viewport={'width': 800, 'height': 2700})
         page = context.new_page()
         
-        st.info("🔗 Connecting to Airtable Interface...")
-        page.goto(target_url, wait_until="load")
-        page.wait_for_timeout(7000) 
-
-        # Extract Header Text (Everything before the '|')
+        st.info("🔗 Connecting...")
+        page.goto(target_url, wait_until="domcontentloaded")
+        
+        # Optimized Header Extraction: Dynamic wait instead of flat 7s sleep
         try:
-            # Added the specific h2 class provided by the user to the selection pool
-            header_selector = 'h1, h2.font-family-display-updated, .interfaceTitle, [data-testid="interface-title"]'
+            # Look for h2 with the specific class or h1
+            header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
-            
-            # Explicitly wait for the header to be attached to the DOM before reading
-            header_locator.wait_for(state="attached", timeout=15000)
+            header_locator.wait_for(state="visible", timeout=10000)
             
             raw_header = header_locator.inner_text()
-            if raw_header and "|" in raw_header:
-                header_title = raw_header.split("|")[0].strip()
-            elif raw_header:
-                header_title = raw_header.strip()
+            header_title = raw_header.split("|")[0].strip() if "|" in raw_header else raw_header.strip()
         except Exception as e:
-            st.warning(f"Could not parse header title: {e}")
+            st.warning("Header load timed out, using default title.")
 
         for region in regions:
             status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 Navigating to **{region}**...")
+            status_placeholder.write(f"🔄 **{region}**...")
             
             try:
-                # Direct target based on HTML structure: role="tab" containing region text
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
-                
-                # Wait for tab and click
-                tab_selector.wait_for(state="visible", timeout=15000)
+                tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
-                # Wait for data to refresh
-                page.wait_for_timeout(6000) 
+                # Reduced wait time: 3s is usually enough for data refresh on fast connections
+                page.wait_for_timeout(3000) 
                 
-                # Scroll to trigger lazy-loading for the tall portrait format (now 2500)
+                # Snappier scroll sequence (reduced pauses)
                 page.mouse.wheel(0, 2500)
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(800)
                 page.mouse.wheel(0, -2500)
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(500)
 
-                # Capture exactly 800x2500
                 filename = f"{region.lower().replace(' ', '')}snap.png"
                 page.screenshot(
                     path=filename,
@@ -90,8 +80,6 @@ def capture_regional_images(target_url):
                 )
 
                 # Upload to Cloudinary
-                status_placeholder.write(f"☁️ Uploading **{region}** to Cloudinary...")
-                # Removed underscores from folder name and public_id
                 upload_res = cloudinary.uploader.upload(
                     filename, 
                     folder="airtableautomation",
@@ -105,72 +93,74 @@ def capture_regional_images(target_url):
                     "date": capture_date,
                     "header_id": header_title
                 })
-                status_placeholder.write(f"✅ **{region}** captured.")
+                status_placeholder.write(f"✅ **{region}** ready.")
                 
             except Exception as e:
-                st.error(f"Could not capture {region}: {e}")
+                st.error(f"Error on {region}: {e}")
 
         browser.close()
     return captured_data
 
 def sync_to_airtable(data_list):
-    """Sends all captured images to Airtable as a single consolidated record."""
+    """Sends all captured images to Airtable as a single consolidated record with specific Cloud ID mapping."""
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {
         "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
         "Content-Type": "application/json"
     }
     
-    if not data_list:
-        return None
+    if not data_list: return None
 
-    # Consolidate all data into one record
+    # Helper function to find a URL by region name
+    def get_url(region_name):
+        for item in data_list:
+            if item["region"] == region_name:
+                return item["url"]
+        return ""
+
     all_attachments = [{"url": item["url"]} for item in data_list]
-    all_urls_text = "\n".join([f"{item['region']}: {item['url']}" for item in data_list])
-    capture_date = data_list[0]["date"]
-    header_id = data_list[0].get("header_id", "Consolidated Report")
+    
+    # Mapping logic for specific Cloud ID fields
+    fields = {
+        "Region": data_list[0].get("header_id", "Consolidated Report"), 
+        "Attachments": all_attachments,
+        "Date": data_list[0]["date"],
+        "Cloud ID 1": get_url("All Regions"),
+        "Cloud ID 2": get_url("Asia"),
+        "Cloud ID 3": get_url("Europe"),
+        "Cloud ID 4": get_url("LATAM"),
+        "Cloud ID 5": get_url("Canada")
+    }
     
     payload = {
-        "records": [
-            {
-                "fields": {
-                    "Type": header_id, 
-                    "Attachments": all_attachments,
-                    "Cloudinary URL": all_urls_text, 
-                    "Date": capture_date
-                }
-            }
-        ]
+        "records": [{
+            "fields": fields
+        }]
     }
 
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        st.success(f"🎉 Successfully created one consolidated record in Airtable!")
+        st.success(f"🎉 Consolidated record created with Cloud ID mappings!")
     else:
-        st.error(f"❌ Airtable Sync Error: {response.text}")
+        st.error(f"❌ Sync Error: {response.text}")
     return response.json()
 
 # --- 4. USER INTERFACE ---
 
 st.set_page_config(page_title="Airtable Regional Snap", layout="wide")
-st.title("🗺️ Regional Interface Automation")
+st.title("🗺️ Regional Snap")
 
-url_input = st.text_input("Airtable Interface URL", placeholder="https://airtable.com/app...")
+url_input = st.text_input("Airtable Interface URL")
 
-if st.button("🚀 Run Full Cycle"):
+if st.button("🚀 Run Cycle"):
     if url_input:
         results = capture_regional_images(url_input)
         if results:
-            with st.spinner("Syncing to Airtable..."):
-                sync_to_airtable(results)
-            
+            sync_to_airtable(results)
             st.divider()
-            st.subheader("Results Preview")
             cols = st.columns(len(results))
             for idx, item in enumerate(results):
                 with cols[idx]:
-                    st.image(item["local_file"], caption=f"{item['region']} ({item['date']})")
+                    st.image(item["local_file"], caption=item["region"])
                     if os.path.exists(item["local_file"]):
                         os.remove(item["local_file"])
-    else:
-        st.warning("Please enter a valid Airtable Interface URL.")
