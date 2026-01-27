@@ -17,9 +17,9 @@ install_browser_binaries()
 # --- CONFIGURATION: CLOUDINARY ---
 # Add these to your Streamlit Secrets
 cloudinary.config(
-    cloud_name = st.secrets["ddiyjefga"],
-    api_key = st.secrets["626943611257156"],
-    api_secret = st.secrets["r7Ss-6QYUJwYPNWCJPCk8JD9TOQ"],
+    cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
+    api_key = st.secrets["CLOUDINARY_API_KEY"],
+    api_secret = st.secrets["CLOUDINARY_API_SECRET"],
     secure = True
 )
 
