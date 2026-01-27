@@ -147,15 +147,15 @@ def sync_to_airtable(data_list):
 
 # --- 4. USER INTERFACE ---
 
-st.set_page_config(page_title="Airtable Regional Snap", layout="wide")
-st.title("🗺️ Regional Snap")
+st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
+st.title("🗺️ Bi-Weekly Report Capture")
 
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj"
 )
 
-if st.button("🚀 Run Cycle"):
+if st.button("🚀 Save and Email"):
     if url_input:
         results = capture_regional_images(url_input)
         if results:
