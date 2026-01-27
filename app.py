@@ -1,106 +1,102 @@
 import streamlit as st
-import asyncio
-from playwright.sync_api import sync_playwright
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.image import MIMEImage
-import os
 import subprocess
+import os
+import requests
+import cloudinary
+import cloudinary.uploader
+from playwright.sync_api import sync_playwright
 
-# This function runs the playwright install command if it hasn't been run yet
+# --- SETUP: BROWSER INSTALLATION ---
 @st.cache_resource
 def install_browser_binaries():
     subprocess.run(["playwright", "install", "chromium"])
+    subprocess.run(["playwright", "install-deps"])
 
 install_browser_binaries()
 
-# Now import playwright and start your app logic
-from playwright.sync_api import sync_playwright
+# --- CONFIGURATION: CLOUDINARY ---
+# Add these to your Streamlit Secrets
+cloudinary.config(
+    cloud_name = st.secrets["ddiyjefga"],
+    api_key = st.secrets["626943611257156"],
+    api_secret = st.secrets["r7Ss-6QYUJwYPNWCJPCk8JD9TOQ"],
+    secure = True
+)
 
-# Check if chromium is already installed; if not, install it
-if not os.path.exists("/home/appuser/.cache/ms-playwright/"):
-    subprocess.run(["playwright", "install", "chromium"])
-    subprocess.run(["playwright", "install-deps"])
-
-# --- EMAIL CONFIGURATION ---
-# It's best to use environment variables for security
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "your-email@gmail.com")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "your-app-password")
+# --- HELPER FUNCTIONS ---
 
 def capture_airtable(url, output_path):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Increase the default timeout to 60 seconds
         context = browser.new_context(viewport={'width': 1920, 'height': 1080})
         page = context.new_page()
         page.set_default_timeout(60000) 
         
-        st.info("Navigating to Airtable...")
-        
-        # 1. Change 'networkidle' to 'load' (much faster/more reliable)
+        st.info("📸 Capturing Airtable Interface...")
         page.goto(url, wait_until="load")
         
-        # 2. Wait for a specific Airtable element to ensure the UI is rendered
-        # 'div[role="main"]' or '.sharedView' are common Airtable selectors
+        # Wait for the interface to render
         try:
             page.wait_for_selector(".viewContainer", timeout=15000)
         except:
-            # Fallback if the selector isn't found
-            page.wait_for_timeout(5000) 
+            page.wait_for_timeout(8000) 
             
-        # 3. Give it a brief moment for animations to settle
-        page.wait_for_timeout(3000)
-        
-        # Capture
         page.screenshot(path=output_path, full_page=True)
         browser.close()
 
-def send_email(recipient_list, image_path):
-    """Sends the captured image as an attachment."""
-    msg = MIMEMultipart()
-    msg['Subject'] = "Automated Airtable Interface Export"
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = ", ".join(recipient_list)
+def upload_to_cloudinary(image_path):
+    """Uploads the screenshot to Cloudinary and returns the public URL."""
+    response = cloudinary.uploader.upload(image_path, folder="airtable_captures")
+    return response["secure_url"]
 
-    # Email body
-    text = MIMEText("Attached is the latest snapshot of the Airtable interface.")
-    msg.attach(text)
-
-    # Attach the image
-    with open(image_path, 'rb') as f:
-        img = MIMEImage(f.read())
-        img.add_header('Content-Disposition', 'attachment', filename="airtable_capture.png")
-        msg.attach(img)
-
-    # Connect and send
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-        server.starttls()
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.send_message(msg)
+def send_to_airtable(public_url):
+    """Tells Airtable to fetch the image from the Cloudinary URL."""
+    url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
+    headers = {
+        "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "records": [
+            {
+                "fields": {
+                    "Name": f"Capture {st.date_input('Today')}", 
+                    "Attachment": [{"url": public_url}] # Ensure field name matches Airtable
+                }
+            }
+        ]
+    }
+    
+    response = requests.post(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response.json()
 
 # --- STREAMLIT UI ---
-st.title("📸 Airtable Automated Capturer")
-st.write("Enter an Airtable Interface link to capture and email it.")
+st.title("🖼️ Airtable to Cloudinary to Airtable")
 
-target_url = st.text_input("Airtable Interface URL")
-emails = st.text_area("Recipient Emails (comma separated)").split(",")
+target_url = st.text_input("Paste Airtable Interface URL:")
 
-if st.button("Capture and Send"):
-    if target_url and emails:
+if st.button("Process Capture"):
+    if target_url:
         try:
-            filename = "capture.png"
-            with st.spinner("Capturing full page..."):
+            filename = "capture_temp.png"
+            
+            with st.spinner("1/3: Screenshotting..."):
                 capture_airtable(target_url, filename)
             
-            with st.spinner("Sending emails..."):
-                send_email([e.strip() for e in emails], filename)
+            with st.spinner("2/3: Uploading to Cloudinary..."):
+                public_link = upload_to_cloudinary(filename)
             
-            st.success(f"Successfully sent to {len(emails)} recipients!")
-            st.image(filename, caption="Preview of captured interface")
+            with st.spinner("3/3: Attaching to Airtable..."):
+                send_to_airtable(public_link)
+            
+            st.success("✅ Done! Check your Airtable base.")
+            st.image(filename)
+            
+            # Clean up local file
+            if os.path.exists(filename):
+                os.remove(filename)
+                
         except Exception as e:
-            st.error(f"An error occurred: {e}")
-    else:
-        st.warning("Please provide both a URL and at least one email.")
+            st.error(f"Error: {e}")
