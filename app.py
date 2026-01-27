@@ -59,24 +59,25 @@ def capture_regional_images(target_url):
                 page.wait_for_timeout(6000) 
                 
                 # Scroll to trigger lazy-loading for the tall portrait format (now 2500)
-                page.mouse.wheel(0, 2460)
+                page.mouse.wheel(0, 2500)
                 page.wait_for_timeout(2000)
-                page.mouse.wheel(0, -2460)
+                page.mouse.wheel(0, -2500)
                 page.wait_for_timeout(1000)
 
                 # Capture exactly 800x2500
-                filename = f"{region.lower().replace(' ', '_')}_snap.png"
+                filename = f"{region.lower().replace(' ', '')}snap.png"
                 page.screenshot(
                     path=filename,
-                    clip={'x': 0, 'y': 0, 'width': 800, 'height': 2460}
+                    clip={'x': 0, 'y': 0, 'width': 800, 'height': 2500}
                 )
 
                 # Upload to Cloudinary
                 status_placeholder.write(f"☁️ Uploading **{region}** to Cloudinary...")
+                # Removed underscores from folder name and public_id
                 upload_res = cloudinary.uploader.upload(
                     filename, 
-                    folder="airtable_automation",
-                    public_id=f"snap_{region.lower().replace(' ', '_')}_{capture_date}"
+                    folder="airtableautomation",
+                    public_id=f"snap{region.lower().replace(' ', '')}{capture_date.replace('-', '')}"
                 )
                 
                 captured_data.append({
