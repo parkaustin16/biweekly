@@ -7,7 +7,19 @@ from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 import os
 import subprocess
-import os
+
+# This function runs the playwright install command if it hasn't been run yet
+@st.cache_resource
+def install_playwright():
+    try:
+        # Check if we are in the Streamlit Cloud environment
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+        # Some environments need the system deps installed via playwright too
+        subprocess.run(["playwright", "install-deps"], check=True)
+    except Exception as e:
+        st.error(f"Error installing Playwright: {e}")
+
+install_playwright()
 
 # Check if chromium is already installed; if not, install it
 if not os.path.exists("/home/appuser/.cache/ms-playwright/"):
