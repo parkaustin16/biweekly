@@ -95,7 +95,7 @@ def capture_regional_images(target_url):
     return captured_data
 
 def sync_to_airtable(data_list):
-    """Sends all captured images to Airtable as new records including the capture date."""
+    """Sends all captured images to Airtable as new records including the capture date and Cloudinary URL."""
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {
         "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
@@ -108,6 +108,7 @@ def sync_to_airtable(data_list):
             "fields": {
                 "Region": item["region"], 
                 "Attachments": [{"url": item["url"]}],
+                "Cloudinary URL": item["url"], # New field added here
                 "Date": item["date"]  # Ensure this field (Date type) exists in Airtable
             }
         })
