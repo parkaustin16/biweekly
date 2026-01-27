@@ -31,20 +31,30 @@ SENDER_EMAIL = os.getenv("SENDER_EMAIL", "your-email@gmail.com")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "your-app-password")
 
 def capture_airtable(url, output_path):
-    """Captures a full-page screenshot of the Airtable link."""
     with sync_playwright() as p:
-        # Airtable interfaces work best in Chromium
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        # Increase the default timeout to 60 seconds
+        context = browser.new_context(viewport={'width': 1920, 'height': 1080})
+        page = context.new_page()
+        page.set_default_timeout(60000) 
         
-        # Navigate and wait for the page to finish loading dynamic content
         st.info("Navigating to Airtable...")
-        page.goto(url, wait_until="networkidle")
         
-        # Optional: Wait a few extra seconds for charts/dashboards to animate
-        page.wait_for_timeout(5000) 
+        # 1. Change 'networkidle' to 'load' (much faster/more reliable)
+        page.goto(url, wait_until="load")
         
-        # Capture the full scrollable area
+        # 2. Wait for a specific Airtable element to ensure the UI is rendered
+        # 'div[role="main"]' or '.sharedView' are common Airtable selectors
+        try:
+            page.wait_for_selector(".viewContainer", timeout=15000)
+        except:
+            # Fallback if the selector isn't found
+            page.wait_for_timeout(5000) 
+            
+        # 3. Give it a brief moment for animations to settle
+        page.wait_for_timeout(3000)
+        
+        # Capture
         page.screenshot(path=output_path, full_page=True)
         browser.close()
 
