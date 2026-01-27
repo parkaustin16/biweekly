@@ -134,7 +134,7 @@ def sync_to_airtable(data_list):
         "records": [
             {
                 "fields": {
-                    "Region": header_id, 
+                    "Type": header_id, 
                     "Attachments": all_attachments,
                     "Cloudinary URL": all_urls_text, 
                     "Date": capture_date
