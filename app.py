@@ -59,16 +59,16 @@ def capture_regional_images(target_url):
                 page.wait_for_timeout(6000) 
                 
                 # Scroll to trigger lazy-loading for the tall portrait format (now 2500)
-                page.mouse.wheel(0, 2500)
+                page.mouse.wheel(0, 2460)
                 page.wait_for_timeout(2000)
-                page.mouse.wheel(0, -2500)
+                page.mouse.wheel(0, -2460)
                 page.wait_for_timeout(1000)
 
                 # Capture exactly 800x2500
                 filename = f"{region.lower().replace(' ', '_')}_snap.png"
                 page.screenshot(
                     path=filename,
-                    clip={'x': 0, 'y': 0, 'width': 800, 'height': 2500}
+                    clip={'x': 0, 'y': 0, 'width': 800, 'height': 2460}
                 )
 
                 # Upload to Cloudinary
