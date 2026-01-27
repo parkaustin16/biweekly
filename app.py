@@ -9,10 +9,11 @@ from playwright.sync_api import sync_playwright
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
 def install_browser_binaries():
-    """Ensures Chromium and Linux dependencies are present on Streamlit Cloud."""
+    """Ensures Chromium binaries are present. System deps are handled by packages.txt"""
     try:
+        # Note: install-deps is removed here because it fails on Streamlit Cloud; 
+        # those libraries must be in your packages.txt file.
         subprocess.run(["playwright", "install", "chromium"], check=True)
-        subprocess.run(["playwright", "install-deps"], check=True)
     except Exception as e:
         st.error(f"Setup Error: {e}")
 
@@ -29,53 +30,60 @@ cloudinary.config(
 # --- 3. CORE LOGIC ---
 
 def capture_regional_images(target_url):
+    # The list of tabs to cycle through
     regions = ["Asia", "Europe", "LATAM", "Canada", "All Regions"]
     captured_data = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Large viewport to ensure the 2400px height is physically rendered
+        # Large viewport to ensure the 2400px height is physically rendered by the engine
         context = browser.new_context(viewport={'width': 1200, 'height': 2600})
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
         page.goto(target_url, wait_until="load")
-        page.wait_for_timeout(5000) # Initial soak time
+        page.wait_for_timeout(5000) # Initial soak time for the interface to initialize
 
         for region in regions:
-            status_text = st.empty()
-            status_text.write(f"🔄 Navigating to **{region}**...")
+            status_placeholder = st.empty()
+            status_placeholder.write(f"🔄 Navigating to **{region}**...")
             
             try:
                 # Click the tab by its text name
+                # We use a robust locator that looks for buttons containing the region name
                 tab = page.get_by_role("button", name=region, exact=True)
                 tab.click()
                 
-                # Wait for charts/data to refresh and animations to settle
-                page.wait_for_timeout(5000) 
+                # Wait for data to refresh and charts to animate
+                page.wait_for_timeout(6000) 
                 
-                # Scroll down and back up to trigger any lazy-loading elements
-                page.mouse.wheel(0, 2000)
-                page.wait_for_timeout(1000)
-                page.mouse.wheel(0, -2000)
+                # Scroll sequence to trigger lazy-loaded Airtable components
+                page.mouse.wheel(0, 2400)
+                page.wait_for_timeout(1500)
+                page.mouse.wheel(0, -2400)
                 page.wait_for_timeout(1000)
 
-                # Capture specific 800x2400 area
-                filename = f"{region.lower()}_snap.png"
+                # Capture specific 800x2400 area as requested
+                filename = f"{region.lower().replace(' ', '_')}_snap.png"
                 page.screenshot(
                     path=filename,
                     clip={'x': 0, 'y': 0, 'width': 800, 'height': 2400}
                 )
 
                 # Upload to Cloudinary
-                status_text.write(f"☁️ Uploading **{region}** to Cloudinary...")
-                upload_res = cloudinary.uploader.upload(filename, folder="airtable_automation")
+                status_placeholder.write(f"☁️ Uploading **{region}** to Cloudinary...")
+                upload_res = cloudinary.uploader.upload(
+                    filename, 
+                    folder="airtable_automation",
+                    public_id=f"snap_{region.lower().replace(' ', '_')}"
+                )
                 
                 captured_data.append({
                     "region": region,
                     "url": upload_res["secure_url"],
                     "local_file": filename
                 })
+                status_placeholder.write(f"✅ **{region}** captured and uploaded.")
                 
             except Exception as e:
                 st.error(f"Could not capture {region}: {e}")
@@ -95,17 +103,18 @@ def sync_to_airtable(data_list):
     for item in data_list:
         records.append({
             "fields": {
-                "Region": item["region"],  # Ensure this field exists in Airtable
-                "Attachments": [{"url": item["url"]}] # Ensure this is an 'Attachment' field
+                "Region": item["region"],  # Ensure this column name is exact in Airtable
+                "Attachments": [{"url": item["url"]}] # Ensure this is an 'Attachment' field type
             }
         })
 
+    # Batch upload to Airtable
     response = requests.post(url, headers=headers, json={"records": records})
     
     if response.status_code == 200:
-        st.success(f"✅ Successfully created {len(records)} records in Airtable!")
+        st.success(f"🎉 Successfully created {len(records)} records in Airtable!")
     else:
-        st.error(f"❌ Airtable Sync Error (422/401): {response.text}")
+        st.error(f"❌ Airtable Sync Error: {response.text}")
     
     return response.json()
 
@@ -113,28 +122,34 @@ def sync_to_airtable(data_list):
 
 st.set_page_config(page_title="Airtable Regional Snap", layout="wide")
 st.title("🗺️ Regional Interface Automation")
-st.write("This tool cycles through regional tabs, captures an 800x2400 snapshot, and syncs to Airtable via Cloudinary.")
+st.markdown("""
+This tool automates the process of generating regional reports:
+1. Cycles through tabs: **Asia, Europe, LATAM, Canada, All Regions**.
+2. Captures each at **800x2400**.
+3. Uploads snapshots to **Cloudinary**.
+4. Syncs links to **Airtable** as new records.
+""")
 
-url_input = st.text_input("Airtable Interface URL", placeholder="https://airtable.com/...")
+url_input = st.text_input("Airtable Interface URL", placeholder="https://airtable.com/app.../shr...")
 
 if st.button("🚀 Run Full Cycle"):
     if url_input:
-        # Step 1: Capture & Cloudinary
+        # Step 1 & 2: Capture images and upload to Cloudinary
         results = capture_regional_images(url_input)
         
         if results:
-            # Step 2: Airtable Sync
-            with st.spinner("Finalizing Airtable records..."):
+            # Step 3: Airtable Sync
+            with st.spinner("Syncing data to Airtable..."):
                 sync_to_airtable(results)
             
-            # Step 3: Gallery Preview
+            # Step 4: Gallery Preview
             st.divider()
-            st.subheader("Latest Captures")
+            st.subheader("Results Preview")
             cols = st.columns(len(results))
             for idx, item in enumerate(results):
                 with cols[idx]:
                     st.image(item["local_file"], caption=item["region"])
-                    # Clean up
+                    # Clean up local file after display
                     if os.path.exists(item["local_file"]):
                         os.remove(item["local_file"])
     else:
