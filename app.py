@@ -61,8 +61,8 @@ def send_to_airtable(public_url):
         "records": [
             {
                 "fields": {
-                    "Name": f"Capture {st.date_input('Today')}", 
-                    "Attachment": [{"url": public_url}] # Ensure field name matches Airtable
+                    "Screenshot": f"Capture {st.date_input('Today')}", 
+                    "Attachments": [{"url": public_url}] # Ensure field name matches Airtable
                 }
             }
         ]
