@@ -46,12 +46,17 @@ def capture_regional_images(target_url):
 
         # Extract Header Text (Everything before the '|')
         try:
-            # Airtable interfaces usually have the title in an h1 or specific header class
-            # We look for a header element and parse the text
-            raw_header = page.locator('h1, .interfaceTitle, [data-testid="interface-title"]').first.inner_text()
-            if "|" in raw_header:
+            # Added the specific h2 class provided by the user to the selection pool
+            header_selector = 'h1, h2.font-family-display-updated, .interfaceTitle, [data-testid="interface-title"]'
+            header_locator = page.locator(header_selector).first
+            
+            # Explicitly wait for the header to be attached to the DOM before reading
+            header_locator.wait_for(state="attached", timeout=15000)
+            
+            raw_header = header_locator.inner_text()
+            if raw_header and "|" in raw_header:
                 header_title = raw_header.split("|")[0].strip()
-            else:
+            elif raw_header:
                 header_title = raw_header.strip()
         except Exception as e:
             st.warning(f"Could not parse header title: {e}")
@@ -129,7 +134,7 @@ def sync_to_airtable(data_list):
         "records": [
             {
                 "fields": {
-                    "Type": header_id, 
+                    "Region": header_id, 
                     "Attachments": all_attachments,
                     "Cloudinary URL": all_urls_text, 
                     "Date": capture_date
