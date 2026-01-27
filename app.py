@@ -150,7 +150,10 @@ def sync_to_airtable(data_list):
 st.set_page_config(page_title="Airtable Regional Snap", layout="wide")
 st.title("🗺️ Regional Snap")
 
-url_input = st.text_input("Airtable Interface URL")
+url_input = st.text_input(
+    "Airtable Interface URL",
+    value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj"
+)
 
 if st.button("🚀 Run Cycle"):
     if url_input:
