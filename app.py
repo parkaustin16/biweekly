@@ -83,7 +83,7 @@ def capture_regional_images(target_url):
                 upload_res = cloudinary.uploader.upload(
                     filename, 
                     folder="airtableautomation",
-                    public_id=f"snap{region.lower().replace(' ', '')}{capture_date.replace('-', '')}"
+                    public_id=f"{region.lower().replace(' ', '')}{capture_date.replace('-', '')}"
                 )
                 
                 captured_data.append({
