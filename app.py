@@ -122,9 +122,9 @@ def sync_to_airtable(data_list):
     
     # Mapping logic for specific Cloud ID fields
     fields = {
-        "Region": data_list[0].get("header_id", "Consolidated Report"), 
-        "Attachments": all_attachments,
+        "Type": data_list[0].get("header_id", "Consolidated Report"), 
         "Date": data_list[0]["date"],
+        "Attachments": all_attachments,
         "Cloud ID 1": get_url("All Regions"),
         "Cloud ID 2": get_url("Asia"),
         "Cloud ID 3": get_url("Europe"),
