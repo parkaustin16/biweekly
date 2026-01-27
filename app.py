@@ -10,16 +10,13 @@ import subprocess
 
 # This function runs the playwright install command if it hasn't been run yet
 @st.cache_resource
-def install_playwright():
-    try:
-        # Check if we are in the Streamlit Cloud environment
-        subprocess.run(["playwright", "install", "chromium"], check=True)
-        # Some environments need the system deps installed via playwright too
-        subprocess.run(["playwright", "install-deps"], check=True)
-    except Exception as e:
-        st.error(f"Error installing Playwright: {e}")
+def install_browser_binaries():
+    subprocess.run(["playwright", "install", "chromium"])
 
-install_playwright()
+install_browser_binaries()
+
+# Now import playwright and start your app logic
+from playwright.sync_api import sync_playwright
 
 # Check if chromium is already installed; if not, install it
 if not os.path.exists("/home/appuser/.cache/ms-playwright/"):
