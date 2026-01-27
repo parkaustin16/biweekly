@@ -6,6 +6,13 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 import os
+import subprocess
+import os
+
+# Check if chromium is already installed; if not, install it
+if not os.path.exists("/home/appuser/.cache/ms-playwright/"):
+    subprocess.run(["playwright", "install", "chromium"])
+    subprocess.run(["playwright", "install-deps"])
 
 # --- EMAIL CONFIGURATION ---
 # It's best to use environment variables for security
