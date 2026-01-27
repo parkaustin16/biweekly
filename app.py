@@ -4,6 +4,7 @@ import os
 import requests
 import cloudinary
 import cloudinary.uploader
+from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 # --- 1. CLOUD ENVIRONMENT SETUP ---
@@ -30,11 +31,12 @@ cloudinary.config(
 def capture_regional_images(target_url):
     regions = ["Asia", "Europe", "LATAM", "Canada", "All Regions"]
     captured_data = []
+    capture_date = datetime.now().strftime("%Y-%m-%d")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Using requested 800 width for the browser instance
-        context = browser.new_context(viewport={'width': 800, 'height': 2600})
+        # Increased height to 2700 to comfortably render the 2500px capture
+        context = browser.new_context(viewport={'width': 800, 'height': 2700})
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
@@ -46,7 +48,7 @@ def capture_regional_images(target_url):
             status_placeholder.write(f"🔄 Navigating to **{region}**...")
             
             try:
-                # Direct target based on your HTML structure: role="tab" containing region text
+                # Direct target based on HTML structure: role="tab" containing region text
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 
                 # Wait for tab and click
@@ -56,17 +58,17 @@ def capture_regional_images(target_url):
                 # Wait for data to refresh
                 page.wait_for_timeout(6000) 
                 
-                # Scroll to trigger lazy-loading for the tall portrait format
-                page.mouse.wheel(0, 2400)
+                # Scroll to trigger lazy-loading for the tall portrait format (now 2500)
+                page.mouse.wheel(0, 2500)
                 page.wait_for_timeout(2000)
-                page.mouse.wheel(0, -2400)
+                page.mouse.wheel(0, -2500)
                 page.wait_for_timeout(1000)
 
-                # Capture exactly 800x2400
+                # Capture exactly 800x2500
                 filename = f"{region.lower().replace(' ', '_')}_snap.png"
                 page.screenshot(
                     path=filename,
-                    clip={'x': 0, 'y': 0, 'width': 800, 'height': 2400}
+                    clip={'x': 0, 'y': 0, 'width': 800, 'height': 2500}
                 )
 
                 # Upload to Cloudinary
@@ -74,13 +76,14 @@ def capture_regional_images(target_url):
                 upload_res = cloudinary.uploader.upload(
                     filename, 
                     folder="airtable_automation",
-                    public_id=f"snap_{region.lower().replace(' ', '_')}"
+                    public_id=f"snap_{region.lower().replace(' ', '_')}_{capture_date}"
                 )
                 
                 captured_data.append({
                     "region": region,
                     "url": upload_res["secure_url"],
-                    "local_file": filename
+                    "local_file": filename,
+                    "date": capture_date
                 })
                 status_placeholder.write(f"✅ **{region}** captured.")
                 
@@ -91,7 +94,7 @@ def capture_regional_images(target_url):
     return captured_data
 
 def sync_to_airtable(data_list):
-    """Sends all captured images to Airtable as new records."""
+    """Sends all captured images to Airtable as new records including the capture date."""
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {
         "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
@@ -103,7 +106,8 @@ def sync_to_airtable(data_list):
         records.append({
             "fields": {
                 "Region": item["region"], 
-                "Attachments": [{"url": item["url"]}]
+                "Attachments": [{"url": item["url"]}],
+                "Date": item["date"]  # Ensure this field (Date type) exists in Airtable
             }
         })
 
@@ -133,7 +137,7 @@ if st.button("🚀 Run Full Cycle"):
             cols = st.columns(len(results))
             for idx, item in enumerate(results):
                 with cols[idx]:
-                    st.image(item["local_file"], caption=item["region"])
+                    st.image(item["local_file"], caption=f"{item['region']} ({item['date']})")
                     if os.path.exists(item["local_file"]):
                         os.remove(item["local_file"])
     else:
