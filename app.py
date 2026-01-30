@@ -158,17 +158,18 @@ def capture_regional_images(target_url):
                             "label": f"{section_name} P{page_num}"
                         })
 
-                        # --- UPDATED PAGINATION LOGIC ---
-                        # Target the specific role="button" containing "Next" span
+                        # --- UPDATED PAGINATION LOGIC (FIXED SELECTOR) ---
                         next_btn_check_js = f"""
                         () => {{
                             const h2s = Array.from(document.querySelectorAll('h2'));
                             const header = h2s.find(h => h.innerText.trim() === "{section_name}");
                             if (!header) return false;
+                            
                             const container = header.closest('.interfaceControl') || header.parentElement.parentElement;
                             
-                            // Specific selector based on provided HTML structure
-                            const btn = container.querySelector('div[role="button"]:has(span:text-is("Next"))');
+                            // Use standard DOM methods instead of Playwright-only selectors inside evaluate
+                            const buttons = Array.from(container.querySelectorAll('div[role="button"]'));
+                            const btn = buttons.find(b => b.textContent.includes('Next'));
                             
                             return (btn && 
                                     btn.getAttribute('aria-disabled') !== 'true' && 
@@ -176,15 +177,13 @@ def capture_regional_images(target_url):
                                     window.getComputedStyle(btn).visibility !== 'hidden');
                         }}
                         """
-                        # Fallback for standard playwright locator if JS check passes
                         has_next = page.evaluate(next_btn_check_js)
                         
                         if has_next:
                             try:
-                                # Target the specific button inside the section's control area
                                 section_container = page.locator(f"div.interfaceControl:has(h2:text-is('{section_name}'))").first
-                                # Use the span text as the locator hook inside the button
-                                next_button = section_container.locator('div[role="button"]').filter(has=page.locator('span', has_text="Next")).first
+                                # This locator is handled by Playwright, so :has-text is fine here
+                                next_button = section_container.locator('div[role="button"]').filter(has_text="Next").first
                                 
                                 next_button.scroll_into_view_if_needed()
                                 next_button.click(force=True, timeout=10000)
@@ -219,8 +218,6 @@ def sync_to_airtable(data_list):
         for gal in item.get("galleries", []):
             record_attachments.append({"url": gal["url"]})
             
-        # --- CLEAN RECORD TYPE STRING ---
-        # Removals are handled in the display name logic
         fields = {
             "Type": f"Consolidated Report | {item['region']}",
             "Date": item["date"],
