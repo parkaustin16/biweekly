@@ -98,34 +98,72 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # 3. Dynamic Height Calculation for "Master Banner Usage Breakdown"
-                dynamic_js = """
+                # 3. Dynamic Height & Width Calculation for Summary
+                # We target the main content container to match the width logic used in galleries
+                summary_layout_js = """
                 () => {
                     const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
                     const targetHeader = headers.find(h => 
                         h.innerText && h.innerText.trim().toLowerCase() === 'master banner usage breakdown'
                     );
                     
-                    if (!targetHeader) return 2200;
+                    // Fallback area if header not found
+                    if (!targetHeader) return { x: 0, y: 0, width: 1100, height: 2200 };
 
                     let container = targetHeader.closest('[role="region"]') || targetHeader.closest('.interfaceControl') || targetHeader.parentElement;
+                    
+                    // Find the outermost layout container to get a consistent width
+                    const outerContainer = document.querySelector('.sharedInterfacePage, .interfaceContent, [role="main"]') || container;
+                    const rect = outerContainer.getBoundingClientRect();
+
                     const boxes = Array.from(container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"], [role="button"], [class*="grid"], [class*="chart"]'));
+                    let bottomY = targetHeader.getBoundingClientRect().bottom + window.scrollY + 500;
+                    
                     if (boxes.length > 0) {
                         const bottoms = boxes.map(b => b.getBoundingClientRect().bottom + window.scrollY);
-                        return Math.max(...bottoms) + 80;
+                        bottomY = Math.max(...bottoms) + 80;
                     }
-                    return targetHeader.getBoundingClientRect().bottom + window.scrollY + 500;
+
+                    return {
+                        x: Math.floor(rect.left) || 0,
+                        y: 0,
+                        width: Math.floor(rect.width) || 1100,
+                        height: Math.min(int(bottomY), 3400)
+                    };
                 }
                 """
-                calculated_height = page.evaluate(dynamic_js)
-                clip_height = min(int(calculated_height), 3400) if (calculated_height and calculated_height > 100) else 2000
+                # Simplified dynamic height for summary capture using same width logic as galleries
+                calculated_layout = page.evaluate("""
+                () => {
+                    // We look for the main content area to determine the 'standard' width of the interface
+                    const mainContent = document.querySelector('.interfaceContent') || document.body;
+                    const rect = mainContent.getBoundingClientRect();
+                    
+                    // Logic to find bottom of summary section
+                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4'));
+                    const target = headers.find(h => h.innerText.toLowerCase().includes('breakdown')) || headers[0];
+                    let bottom = 2200;
+                    if(target) {
+                        const container = target.closest('.width-full') || target.parentElement;
+                        const bounds = container.getBoundingClientRect();
+                        bottom = bounds.bottom + window.scrollY + 200;
+                    }
 
-                # 4. Main Summary Capture
+                    return {
+                        x: Math.max(0, rect.left),
+                        y: 0,
+                        width: rect.width > 500 ? rect.width : 1100,
+                        height: Math.min(bottom, 3500)
+                    };
+                }
+                """)
+
+                # 4. Main Summary Capture (Using dynamic layout to match gallery width)
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
                 page.screenshot(
                     path=main_filename, 
-                    clip={'x': 0, 'y': 0, 'width': 1100, 'height': clip_height},
+                    clip=calculated_layout,
                     type="jpeg",
                     quality=85
                 )
@@ -151,7 +189,6 @@ def capture_regional_images(target_url):
 
                 # Helper to capture paged galleries
                 def capture_paged_gallery(gallery_label, storage_key):
-                    # Show the gallery first
                     page.evaluate(f"""
                         () => {{
                             const el = document.querySelector('[aria-label*="{gallery_label}"]');
@@ -207,7 +244,6 @@ def capture_regional_images(target_url):
                             "url": gal_upload["secure_url"]
                         })
 
-                        # Pagination Logic
                         next_btn = page.locator(f'[aria-label*="{gallery_label}"] div[role="button"]:has(path[d*="m4.64.17"])').first
                         if next_btn.is_visible():
                             is_disabled = next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true' || window.getComputedStyle(el).opacity === '0.5'")
@@ -219,10 +255,10 @@ def capture_regional_images(target_url):
                         else: break
                         if page_idx > 5: break
 
-                # 5. Capture "In Progress" Gallery
+                # 5. Capture Galleries
                 if region != "All Regions":
-                    capture_paged_gallery("In Progress", "in_progress_pages")
                     capture_paged_gallery("Completed Request Gallery", "completed_gallery_pages")
+                    capture_paged_gallery("In Progress", "in_progress_pages")
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured.")
@@ -248,9 +284,9 @@ def sync_to_airtable(data_list):
         record_type = f"{base_type} | {item['region']}"
         
         record_attachments = [{"url": item["url"]}]
-        for page in item.get("in_progress_pages", []):
-            record_attachments.append({"url": page["url"]})
         for page in item.get("completed_gallery_pages", []):
+            record_attachments.append({"url": page["url"]})
+        for page in item.get("in_progress_pages", []):
             record_attachments.append({"url": page["url"]})
             
         fields = {
@@ -260,8 +296,8 @@ def sync_to_airtable(data_list):
             "Cloud ID": item["url"]
         }
         
-        all_gal_urls = [p["url"] for p in item.get("in_progress_pages", [])] + \
-                       [p["url"] for p in item.get("completed_gallery_pages", [])]
+        all_gal_urls = [p["url"] for p in item.get("completed_gallery_pages", [])] + \
+                       [p["url"] for p in item.get("in_progress_pages", [])]
 
         for i in range(1, 4):
             if len(all_gal_urls) >= i:
@@ -301,9 +337,8 @@ with col2:
 
 if st.session_state.capture_results:
     st.divider()
-    st.info("👀 Reviewing Captured Images. Regions are side-by-side.")
+    st.info("👀 Reviewing Captured Images. Regions are side-by-side. Order: Summary -> Gallery -> In Progress.")
     
-    # Create columns dynamically based on number of regions captured
     n_cols = len(st.session_state.capture_results)
     preview_cols = st.columns(n_cols)
     
@@ -314,10 +349,10 @@ if st.session_state.capture_results:
             st.caption("Summary")
             st.image(item["local_file"], use_container_width=True)
             
-            for i, page in enumerate(item.get("in_progress_pages", [])):
-                st.caption(f"In Progress P{i+1}")
-                st.image(page["local"], use_container_width=True)
-                
             for i, page in enumerate(item.get("completed_gallery_pages", [])):
                 st.caption(f"Completed Gallery P{i+1}")
+                st.image(page["local"], use_container_width=True)
+
+            for i, page in enumerate(item.get("in_progress_pages", [])):
+                st.caption(f"In Progress P{i+1}")
                 st.image(page["local"], use_container_width=True)
