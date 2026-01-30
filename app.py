@@ -36,13 +36,14 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width': 1920, 'height': 3500})
+        # Optimized viewport height to reduce initial load strain
+        context = browser.new_context(viewport={'width': 1920, 'height': 2500})
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
         page.goto(target_url, wait_until="networkidle")
         
-        # --- CLEANUP: REMOVE COOKIES & SPECIFIC UI ELEMENTS ---
+        # --- CLEANUP: REMOVE COOKIES & UI OVERLAYS ---
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -51,8 +52,8 @@ def capture_regional_images(target_url):
                     '[id*="cookie"]', 
                     '[class*="cookie"]',
                     '.banner-content',
-                    'header.flex.flex-none.items-center.width-full', // Top Nav Bar
-                    '.flex.items-center.py2.px2-and-half.border-bottom' // Secondary Header Bar
+                    'header.flex.flex-none.items-center.width-full', 
+                    '.flex.items-center.py2.px2-and-half.border-bottom'
                 ];
                 removeSelectors.forEach(selector => {
                     const elements = document.querySelectorAll(selector);
@@ -60,33 +61,32 @@ def capture_regional_images(target_url):
                 });
             }
         """)
-        page.wait_for_timeout(1000)
 
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
-            header_locator.wait_for(state="visible", timeout=10000)
+            header_locator.wait_for(state="visible", timeout=5000)
             raw_header = header_locator.inner_text()
             header_title = raw_header.split("|")[0].strip() if "|" in raw_header else raw_header.strip()
         except Exception:
-            pass # Silent fail to keep logs clean
+            pass 
 
         for region in regions:
             status_placeholder = st.empty()
             
             try:
-                # 1. Navigate to Tab & FORCE DATA REFRESH
+                # 1. Navigate to Tab
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
-                # Critical: Scroll down and back up to force charts to re-render
-                page.evaluate("window.scrollTo(0, 1000)")
-                page.wait_for_timeout(1500)
-                page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(2500) 
+                # Optimized Refresh: Only scroll enough to trigger chart loading, then wait less
+                page.mouse.wheel(0, 500) 
+                page.wait_for_timeout(800)
+                page.mouse.wheel(0, -500)
+                page.wait_for_timeout(1200) # Reduced from 2500ms
 
-                # 2. HIDE GALLERIES FOR SUMMARY CAPTURE
+                # 2. HIDE GALLERIES
                 page.evaluate("""
                     () => {
                         const hideElements = (labelText) => {
@@ -102,23 +102,24 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # 3. Dynamic Height & Width Calculation for Summary (TIGHT CROP + BUFFER)
+                # 3. Dynamic Height Calculation (Optimized Search)
                 calculated_layout = page.evaluate("""
                 () => {
                     const mainContent = document.querySelector('.interfaceContent') || document.body;
                     const rect = mainContent.getBoundingClientRect();
                     
-                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
-                    const target = headers.find(h => h.innerText && h.innerText.toLowerCase().includes('master banner usage breakdown'));
+                    const target = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'))
+                                       .find(h => h.innerText && h.innerText.toLowerCase().includes('master banner usage breakdown'));
                     
-                    let bottom = 2200;
+                    let bottom = 2000;
                     if(target) {
                         const sectionContainer = target.closest('.width-full.rounded-big') || target.closest('[role="region"]') || target.parentElement;
-                        const items = Array.from(sectionContainer.querySelectorAll('.chartContainer, .legend, svg, canvas, [role="listitem"], .recordList'));
+                        // Targeted selection of visual markers to find the end of the data
+                        const markers = Array.from(sectionContainer.querySelectorAll('.chartContainer, .legend, svg, canvas'));
                         
-                        if (items.length > 0) {
-                            const bottoms = items.map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                            bottom = Math.max(...bottoms) + 60; // Increased buffer from 15 to 60 for better visual breathing room
+                        if (markers.length > 0) {
+                            const bottoms = markers.map(el => el.getBoundingClientRect().bottom + window.scrollY);
+                            bottom = Math.max(...bottoms) + 40; // 40px buffer for a clean look
                         } else {
                             bottom = sectionContainer.getBoundingClientRect().bottom + window.scrollY + 20;
                         }
@@ -140,7 +141,7 @@ def capture_regional_images(target_url):
                     path=main_filename, 
                     clip=calculated_layout,
                     type="jpeg",
-                    quality=85
+                    quality=80 # Slightly lower quality for faster processing/upload
                 )
 
                 safe_date = capture_date.replace('-', '')
@@ -148,8 +149,7 @@ def capture_regional_images(target_url):
                     main_filename, 
                     folder="airtableautomation",
                     public_id=f"{safe_region}-main-{safe_date}",
-                    fetch_format="auto",
-                    quality="auto:eco"
+                    fetch_format="auto"
                 )
                 
                 region_entry = {
@@ -197,23 +197,17 @@ def capture_regional_images(target_url):
                             status_placeholder.write(f"🔄 **{region}**: In Progress...")
                         
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(1000)
+                        page.wait_for_timeout(600) # Reduced wait
 
                         safe_label = gallery_label.lower().replace(' ', '-')
                         gal_filename = f"{safe_region}-{safe_label}-{page_idx}.jpg"
-                        page.screenshot(
-                            path=gal_filename, 
-                            clip=gal_info,
-                            type="jpeg",
-                            quality=65
-                        )
+                        page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=60)
                         
                         gal_upload = cloudinary.uploader.upload(
                             gal_filename,
                             folder="airtableautomation",
                             public_id=f"{safe_region}-{safe_label}{page_idx}-{safe_date}",
-                            fetch_format="auto",
-                            quality="auto:eco"
+                            fetch_format="auto"
                         )
 
                         region_entry[storage_key].append({
@@ -227,7 +221,7 @@ def capture_regional_images(target_url):
                             if not is_disabled:
                                 next_btn.click()
                                 page_idx += 1
-                                page.wait_for_timeout(4000) 
+                                page.wait_for_timeout(2500) # Gallery load still needs time
                             else: break
                         else: break
                         if page_idx > 5: break
@@ -325,13 +319,8 @@ if st.session_state.capture_results:
     for idx, item in enumerate(st.session_state.capture_results):
         with preview_cols[idx]:
             st.markdown(f"### {item['region']}")
-            
-            # Show summary image
             st.image(item["local_file"], use_container_width=True)
-            
-            # Show gallery images without captions
             for page in item.get("completed_gallery_pages", []):
                 st.image(page["local"], use_container_width=True)
-
             for page in item.get("in_progress_pages", []):
                 st.image(page["local"], use_container_width=True)
