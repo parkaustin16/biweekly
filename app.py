@@ -124,7 +124,7 @@ def capture_regional_images(target_url):
                     while True:
                         status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
                         
-                        # Find gallery dimensions and pagination state using div[role="button"]
+                        # Find gallery dimensions and pagination state
                         gallery_js = """
                         () => {
                             const findGallery = () => {
@@ -135,12 +135,11 @@ def capture_regional_images(target_url):
                                 const container = galHeader.closest('.interfaceControl') || galHeader.parentElement;
                                 const rect = container.getBoundingClientRect();
                                 
-                                // Specific selector for the Div-based Next button provided by user
-                                const nextBtn = container.querySelector('div[role="button"]:has-text("Next"), div[role="button"] svg path[d*="m4.64.17"]');
+                                // Look for the "Next" button div within the gallery container
+                                const nextBtn = container.querySelector('div[role="button"]:has-text("Next")');
                                 
-                                // Detection for 'disabled' state in Airtable divs often involves checking class names (like 'opacity-low')
-                                // or if the button is simply missing from the specific container
-                                let isLastPage = !nextBtn;
+                                // In Airtable, if the button is missing or has certain classes, it's the last page
+                                const isLastPage = !nextBtn || nextBtn.classList.contains('opacity-low') || nextBtn.getAttribute('aria-disabled') === 'true';
                                 
                                 return {
                                     x: Math.floor(rect.left),
@@ -187,13 +186,15 @@ def capture_regional_images(target_url):
                         })
 
                         # Pagination Logic
+                        if gal_info['isLastPage']:
+                            break
+
+                        # Click Next button using the specific div role selector
                         next_btn_selector = 'div[role="button"]:has-text("Next")'
-                        next_btn = page.locator(next_btn_selector).first
+                        next_btn_locator = page.locator(next_btn_selector).first
                         
-                        # Check visibility and if it looks clickable (not disabled by class/opacity)
-                        if await next_btn.is_visible():
-                            # Record current state to see if it changes after click
-                            next_btn.click()
+                        if next_btn_locator.is_visible():
+                            next_btn_locator.click()
                             page.wait_for_timeout(3500) # Wait for gallery transition
                             gallery_count += 1
                         else:
