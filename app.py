@@ -1,4 +1,4 @@
-import st
+import streamlit as st
 import subprocess
 import os
 import requests
@@ -65,8 +65,6 @@ def capture_regional_images(target_url):
                 page.wait_for_timeout(3000) 
 
                 # 2. DYNAMIC SIZING LOGIC
-                # We look for the container that has "In Progress" and find its bounding box
-                # We then find the last 'record count' box within that specific section
                 clip_height = 2420 # Default fallback
                 
                 dynamic_js = """
@@ -80,8 +78,7 @@ def capture_regional_images(target_url):
                     // 2. Find the parent container or the next sibling structure that holds the data
                     let container = targetHeader.closest('.interfaceControl') || targetHeader.parentElement;
                     
-                    // 3. Find all boxes that usually contain record counts (often have specific Airtable classes)
-                    // We look for elements that look like summary cards or grid items
+                    // 3. Find all boxes that usually contain record counts
                     const boxes = container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"]');
                     
                     if (boxes.length > 0) {
@@ -90,16 +87,15 @@ def capture_regional_images(target_url):
                         return rect.bottom + window.scrollY + 20; // Add 20px padding
                     }
                     
-                    // Fallback: just use the bottom of the "In Progress" container
                     return targetHeader.getBoundingClientRect().bottom + window.scrollY + 500;
                 }
                 """
                 
                 calculated_height = page.evaluate(dynamic_js)
                 if calculated_height:
-                    clip_height = min(int(calculated_height), 3400) # Cap at 3400 to prevent errors
+                    clip_height = min(int(calculated_height), 3400) 
                 
-                # 3. Optimized Scroll to trigger lazy loading for the calculated area
+                # 3. Optimized Scroll to trigger lazy loading
                 page.mouse.wheel(0, clip_height)
                 page.wait_for_timeout(1000)
                 page.mouse.wheel(0, -clip_height)
