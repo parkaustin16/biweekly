@@ -81,16 +81,25 @@ def capture_regional_images(target_url):
                 page.wait_for_timeout(4000) 
 
                 # 2. HIDE GALLERY FOR SUMMARY CAPTURE
+                # FIXED: Removed non-standard :has-text selectors that break in page.evaluate
                 page.evaluate("""
                     () => {
-                        const selectors = [
-                            '[aria-label="Completed Request Gallery gallery"]',
-                            '.width-full.rounded-big:has(h2:has-text("Completed Request Gallery"))'
-                        ];
-                        selectors.forEach(s => {
-                            const el = document.querySelector(s);
-                            if (el) el.style.display = 'none';
-                        });
+                        const galleryAttr = '[aria-label="Completed Request Gallery gallery"]';
+                        const el = document.querySelector(galleryAttr);
+                        if (el) {
+                            el.style.display = 'none';
+                            // Try to find the parent container card to hide the whole white box
+                            const container = el.closest('.width-full.rounded-big');
+                            if (container) container.style.display = 'none';
+                        }
+                        
+                        // Fallback: search for header text manually
+                        const h2s = Array.from(document.querySelectorAll('h2'));
+                        const galHeader = h2s.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
+                        if (galHeader) {
+                            const card = galHeader.closest('.width-full.rounded-big');
+                            if (card) card.style.display = 'none';
+                        }
                     }
                 """)
 
@@ -141,21 +150,26 @@ def capture_regional_images(target_url):
                     "local_file": main_filename,
                     "date": capture_date,
                     "header_id": header_title,
-                    "gallery_p1": None, # For the first page capture
+                    "gallery_p1": None,
                     "galleries": [] 
                 }
 
                 # 5. RE-SHOW AND CAPTURE GALLERY
                 page.evaluate("""
                     () => {
-                        const selectors = [
-                            '[aria-label="Completed Request Gallery gallery"]',
-                            '.width-full.rounded-big:has(h2:has-text("Completed Request Gallery"))'
-                        ];
-                        selectors.forEach(s => {
-                            const el = document.querySelector(s);
-                            if (el) el.style.display = 'block';
-                        });
+                        const galleryAttr = '[aria-label="Completed Request Gallery gallery"]';
+                        const el = document.querySelector(galleryAttr);
+                        if (el) {
+                            el.style.display = 'block';
+                            const container = el.closest('.width-full.rounded-big');
+                            if (container) container.style.display = 'block';
+                        }
+                        const h2s = Array.from(document.querySelectorAll('h2'));
+                        const galHeader = h2s.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
+                        if (galHeader) {
+                            const card = galHeader.closest('.width-full.rounded-big');
+                            if (card) card.style.display = 'block';
+                        }
                     }
                 """)
 
@@ -169,7 +183,7 @@ def capture_regional_images(target_url):
                             let el = document.querySelector('[aria-label="Completed Request Gallery gallery"]');
                             if (!el) {
                                 const h2s = Array.from(document.querySelectorAll('h2'));
-                                const galHeader = h2s.find(h => h.innerText && h.innerText.trim() === 'Completed Request Gallery');
+                                const galHeader = h2s.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
                                 if (galHeader) el = galHeader.closest('.width-full.rounded-big') || galHeader.parentElement.parentElement;
                             }
                             if (!el) return null;
@@ -185,7 +199,6 @@ def capture_regional_images(target_url):
                         gal_info = page.evaluate(container_js)
                         if not gal_info: break
 
-                        # Logic to capture Page 1 separately
                         status_placeholder.write(f"📸 **{region}**: Gallery Page {gallery_count}...")
                         page.mouse.wheel(0, gal_info['y'] - 100)
                         page.wait_for_timeout(1000)
@@ -218,7 +231,6 @@ def capture_regional_images(target_url):
                                 "url": gal_upload["secure_url"]
                             })
 
-                        # Pagination
                         next_btn = page.locator('[aria-label*="Completed Request Gallery"] div[role="button"]:has(path[d*="m4.64.17"])').first
                         if next_btn.is_visible():
                             is_disabled = next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true' || window.getComputedStyle(el).opacity === '0.5'")
@@ -229,7 +241,7 @@ def capture_regional_images(target_url):
                             else: break
                         else: break
                         
-                        if gallery_count > 4: break # Max 1 summary + 4 gallery pages total
+                        if gallery_count > 4: break
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured.")
@@ -254,7 +266,6 @@ def sync_to_airtable(data_list):
         base_type = item.get("header_id", "Consolidated Report")
         record_type = f"{base_type} | {item['region']}"
         
-        # Collect all attachments starting with Main, then Page 1, then the rest
         record_attachments = [{"url": item["url"]}]
         if item.get("gallery_p1"):
             record_attachments.append({"url": item["gallery_p1"]["url"]})
@@ -268,7 +279,6 @@ def sync_to_airtable(data_list):
             "Cloud ID": item["url"]
         }
         
-        # Fill Gallery fields 1-3
         all_gal_urls = []
         if item.get("gallery_p1"): all_gal_urls.append(item["gallery_p1"]["url"])
         all_gal_urls.extend([g["url"] for g in item.get("galleries", [])])
@@ -312,21 +322,27 @@ with col2:
 if st.session_state.capture_results:
     st.divider()
     st.info("👀 Reviewing Captured Images. Summary -> Gallery Page 1 -> Remaining Pages.")
+    
+    # Restored to original grid-style UI as requested
     for item in st.session_state.capture_results:
-        with st.expander(f"Region: {item['region']}", expanded=True):
-            cols = st.columns(4)
-            with cols[0]:
-                st.subheader("Summary")
-                st.image(item["local_file"])
-            
-            if item.get("gallery_p1"):
-                with cols[1]:
-                    st.subheader("Gallery Pg 1")
-                    st.image(item["gallery_p1"]["local"])
-            
-            # Display additional pages if they exist
-            for i, gal in enumerate(item.get("galleries", [])):
-                col_idx = (i + 2) % 4
-                with cols[col_idx]:
-                    st.subheader(f"Gallery Pg {i+2}")
-                    st.image(gal["local"])
+        st.subheader(f"Region: {item['region']}")
+        
+        # Calculate how many columns we need (Summary + P1 + others)
+        extra_pages = item.get("galleries", [])
+        num_cols = 2 + len(extra_pages)
+        cols = st.columns(num_cols)
+        
+        with cols[0]:
+            st.caption("Summary")
+            st.image(item["local_file"])
+        
+        if item.get("gallery_p1"):
+            with cols[1]:
+                st.caption("Gallery Pg 1")
+                st.image(item["gallery_p1"]["local"])
+        
+        for i, gal in enumerate(extra_pages):
+            with cols[i + 2]:
+                st.caption(f"Gallery Pg {i+2}")
+                st.image(gal["local"])
+        st.divider()
