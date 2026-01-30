@@ -1,3 +1,9 @@
+# ================================
+# REFACTORED AIRTABLE CAPTURE SCRIPT
+# Main Summary (trimmed) + Completed Gallery + In Progress
+# WITH ORIGINAL AIRTABLE PAYLOAD + LOCAL PREVIEWS RESTORED
+# ================================
+
 import streamlit as st
 import subprocess
 import os
@@ -10,7 +16,6 @@ from playwright.sync_api import sync_playwright
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
 def install_browser_binaries():
-    """Ensures Chromium binaries are present."""
     try:
         subprocess.run(["playwright", "install", "chromium"], check=True)
     except Exception as e:
@@ -19,191 +24,166 @@ def install_browser_binaries():
 install_browser_binaries()
 
 # --- 2. CONFIGURATION ---
-if "CLOUDINARY_CLOUD_NAME" in st.secrets:
-    cloudinary.config(
-        cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
-        api_key = st.secrets["CLOUDINARY_API_KEY"],
-        api_secret = st.secrets["CLOUDINARY_API_SECRET"],
-        secure = True
-    )
+cloudinary.config(
+    cloud_name=st.secrets["CLOUDINARY_CLOUD_NAME"],
+    api_key=st.secrets["CLOUDINARY_API_KEY"],
+    api_secret=st.secrets["CLOUDINARY_API_SECRET"],
+    secure=True
+)
 
-# --- 3. CORE LOGIC ---
+# --- 3. HELPERS ---
+
+def capture_paginated_section(page, container_locator, next_button_locator, prefix, quality=55):
+    images = []
+    page_index = 1
+
+    while True:
+        box = container_locator.bounding_box()
+        if not box:
+            break
+
+        filename = f"{prefix}-{page_index}.jpg"
+        page.screenshot(
+            path=filename,
+            clip={
+                'x': box['x'],
+                'y': box['y'] + page.evaluate("window.scrollY"),
+                'width': box['width'],
+                'height': box['height']
+            },
+            type="jpeg",
+            quality=quality
+        )
+
+        upload = cloudinary.uploader.upload(
+            filename,
+            folder="airtableautomation",
+            fetch_format="auto",
+            quality="auto:eco"
+        )
+
+        images.append({"local": filename, "url": upload["secure_url"]})
+        page_index += 1
+
+        if not next_button_locator.is_visible():
+            break
+
+        disabled = next_button_locator.evaluate(
+            "el => el.getAttribute('aria-disabled') === 'true' || getComputedStyle(el).opacity === '0.5'"
+        )
+        if disabled:
+            break
+
+        next_button_locator.click()
+        page.wait_for_timeout(3500)
+
+    return images
+
+# --- 4. CORE LOGIC ---
 
 def capture_regional_images(target_url):
     regions = ["Asia", "Europe", "LATAM", "Canada", "All Regions"]
-    captured_data = []
+    results = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width': 1920, 'height': 5000})
+        context = browser.new_context(viewport={'width': 1920, 'height': 3500})
         page = context.new_page()
-        
-        st.info("🔗 Connecting to Airtable Interface...")
+
         page.goto(target_url, wait_until="networkidle")
-        
-        # --- REMOVE COOKIES & BANNERS ---
-        page.evaluate("""
-            () => {
-                const removeSelectors = ['#onetrust-banner-sdk', '.onetrust-pc-dark-filter', '[id*="cookie"]', '.banner-content'];
-                removeSelectors.forEach(s => {
-                    const el = document.querySelector(s);
-                    if (el) el.remove();
-                });
-            }
-        """)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(2000)
+
+        # Header extraction (RESTORED)
+        try:
+            header_locator = page.locator('h2.font-family-display-updated, h1, .interfaceTitle').first
+            header_locator.wait_for(state="visible", timeout=10000)
+            raw_header = header_locator.inner_text()
+            header_title = raw_header.split("|")[0].strip()
+        except Exception:
+            header_title = "Consolidated Report"
 
         for region in regions:
-            status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 **{region}**: Processing sections...")
-            
-            try:
-                # 1. Navigation
-                tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
-                tab_selector.wait_for(state="visible", timeout=10000)
-                tab_selector.click()
-                page.wait_for_timeout(4000) 
+            safe_region = region.lower().replace(" ", "-")
 
-                safe_region = region.lower().replace(' ', '-')
-                safe_date = capture_date.replace('-', '')
+            entry = {
+                "region": region,
+                "date": capture_date,
+                "header_id": header_title,
+                "url": None,
+                "local_file": None,
+                "galleries": []
+            }
 
-                # --- 2. MAIN SUMMARY (Clipped to include full Master Banner Usage Breakdown card) ---
-                summary_clip_js = """
-                () => {
-                    const h2s = Array.from(document.querySelectorAll('h2'));
-                    const target = h2s.find(h => h.innerText.includes('Master Banner Usage Breakdown'));
-                    if (!target) return 2400; // Fallback height
-                    
-                    const card = target.closest('div[role="button"]') || target.closest('.interfaceControl') || target.parentElement;
-                    const rect = card.getBoundingClientRect();
-                    return Math.floor(rect.bottom + window.scrollY + 25);
-                }
-                """
-                summary_height = page.evaluate(summary_clip_js)
-                main_filename = f"{safe_region}-main.jpg"
-                
-                page.screenshot(
-                    path=main_filename, 
-                    clip={'x': 0, 'y': 0, 'width': 1920, 'height': summary_height},
-                    type="jpeg",
-                    quality=55
+            # --- SWITCH TAB ---
+            page.locator(f'div[role="tab"]:has-text("{region}")').click()
+            page.wait_for_timeout(4000)
+
+            # --- MAIN SUMMARY (STOP AT MASTER BANNER) ---
+            banner = page.locator('text=Master Banner Usage Breakdown').first
+            banner.wait_for(state="visible", timeout=10000)
+            banner_y = banner.bounding_box()['y']
+
+            main_file = f"{safe_region}-main.jpg"
+            page.screenshot(
+                path=main_file,
+                clip={'x': 0, 'y': 0, 'width': 1920, 'height': int(banner_y + 120)},
+                type="jpeg",
+                quality=80
+            )
+
+            main_upload = cloudinary.uploader.upload(
+                main_file,
+                folder="airtableautomation",
+                public_id=f"{safe_region}-main-{capture_date.replace('-', '')}",
+                fetch_format="auto",
+                quality="auto:eco"
+            )
+
+            entry["url"] = main_upload["secure_url"]
+            entry["local_file"] = main_file
+
+            # --- COMPLETED REQUEST GALLERY ---
+            if region != "All Regions":
+                completed_container = page.locator('[aria-label="Completed Request Gallery gallery"]').first
+                completed_container.scroll_into_view_if_needed()
+                page.wait_for_timeout(1000)
+
+                completed_next = completed_container.locator('div[role="button"]:has(path)').last
+
+                completed_images = capture_paginated_section(
+                    page,
+                    completed_container,
+                    completed_next,
+                    f"{safe_region}-gal"
                 )
 
-                main_upload = cloudinary.uploader.upload(
-                    main_filename, 
-                    folder="airtableautomation",
-                    public_id=f"{safe_region}-main-{safe_date}",
-                    fetch_format="auto",
-                    quality="auto:eco"
-                )
-                
-                region_entry = {
-                    "region": region,
-                    "url": main_upload["secure_url"],
-                    "local_file": main_filename,
-                    "date": capture_date,
-                    "galleries": [] 
-                }
+                entry["galleries"].extend(completed_images)
 
-                # --- 3. PAGINATED SECTION CAPTURE ---
-                sections_to_capture = ["Completed Request Gallery", "In Progress"]
-                
-                for section_name in sections_to_capture:
-                    page_num = 1
-                    while page_num <= 5: 
-                        section_js = f"""
-                        () => {{
-                            const h2s = Array.from(document.querySelectorAll('h2'));
-                            const header = h2s.find(h => h.innerText.trim() === "{section_name}");
-                            if (!header) return null;
-                            const container = header.closest('.width-full.rounded-big') || header.parentElement.parentElement;
-                            const rect = container.getBoundingClientRect();
-                            return {{
-                                x: Math.floor(rect.left),
-                                y: Math.floor(rect.top + window.scrollY),
-                                width: Math.floor(rect.width),
-                                height: Math.floor(rect.height)
-                            }};
-                        }}
-                        """
-                        sec_info = page.evaluate(section_js)
-                        if not sec_info:
-                            break
+            # --- IN PROGRESS ---
+            in_prog_header = page.locator('text=In Progress').first
+            in_prog_container = in_prog_header.locator('xpath=ancestor::*[@role="region"]').first
+            in_prog_container.scroll_into_view_if_needed()
+            page.wait_for_timeout(1000)
 
-                        page.mouse.wheel(0, sec_info['y'] - 100)
-                        page.wait_for_timeout(1500)
+            in_prog_next = in_prog_container.locator('div[role="button"]:has(path)').last
 
-                        sec_slug = section_name.lower().replace(' ', '-')
-                        gal_filename = f"{safe_region}-{sec_slug}-{page_num}.jpg"
-                        
-                        page.screenshot(
-                            path=gal_filename, 
-                            clip=sec_info,
-                            type="jpeg",
-                            quality=55
-                        )
-                        
-                        gal_upload = cloudinary.uploader.upload(
-                            gal_filename,
-                            folder="airtableautomation",
-                            public_id=f"{safe_region}-{sec_slug}-{page_num}-{safe_date}",
-                            fetch_format="auto",
-                            quality="auto:eco"
-                        )
-                        
-                        region_entry["galleries"].append({
-                            "local": gal_filename,
-                            "url": gal_upload["secure_url"],
-                            "label": f"{section_name} P{page_num}"
-                        })
+            in_prog_images = capture_paginated_section(
+                page,
+                in_prog_container,
+                in_prog_next,
+                f"{safe_region}-inprogress"
+            )
 
-                        # --- UPDATED PAGINATION LOGIC (FIXED SELECTOR) ---
-                        next_btn_check_js = f"""
-                        () => {{
-                            const h2s = Array.from(document.querySelectorAll('h2'));
-                            const header = h2s.find(h => h.innerText.trim() === "{section_name}");
-                            if (!header) return false;
-                            
-                            const container = header.closest('.interfaceControl') || header.parentElement.parentElement;
-                            
-                            // Use standard DOM methods instead of Playwright-only selectors inside evaluate
-                            const buttons = Array.from(container.querySelectorAll('div[role="button"]'));
-                            const btn = buttons.find(b => b.textContent.includes('Next'));
-                            
-                            return (btn && 
-                                    btn.getAttribute('aria-disabled') !== 'true' && 
-                                    window.getComputedStyle(btn).display !== 'none' &&
-                                    window.getComputedStyle(btn).visibility !== 'hidden');
-                        }}
-                        """
-                        has_next = page.evaluate(next_btn_check_js)
-                        
-                        if has_next:
-                            try:
-                                section_container = page.locator(f"div.interfaceControl:has(h2:text-is('{section_name}'))").first
-                                # This locator is handled by Playwright, so :has-text is fine here
-                                next_button = section_container.locator('div[role="button"]').filter(has_text="Next").first
-                                
-                                next_button.scroll_into_view_if_needed()
-                                next_button.click(force=True, timeout=10000)
-                                
-                                page.wait_for_timeout(3000)
-                                page_num += 1
-                            except Exception as click_err:
-                                st.warning(f"Stopping {section_name} at page {page_num}: {click_err}")
-                                break
-                        else:
-                            break
+            entry["galleries"].extend(in_prog_images)
 
-                captured_data.append(region_entry)
-                status_placeholder.write(f"✅ **{region}** captures complete.")
-                
-            except Exception as e:
-                st.error(f"Error on {region}: {e}")
+            results.append(entry)
 
         browser.close()
-    return captured_data
+
+    return results
+
+# --- 5. AIRTABLE SYNC (UNCHANGED STRUCTURE) ---
 
 def sync_to_airtable(data_list):
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
@@ -211,71 +191,62 @@ def sync_to_airtable(data_list):
         "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
         "Content-Type": "application/json"
     }
-    
-    records_to_create = []
+
+    records = []
+
     for item in data_list:
-        record_attachments = [{"url": item["url"]}]
-        for gal in item.get("galleries", []):
-            record_attachments.append({"url": gal["url"]})
-            
+        record_type = f"{item['header_id']} | {item['region']}"
+
+        attachments = [{"url": item["url"]}]
+        for g in item.get("galleries", []):
+            attachments.append({"url": g["url"]})
+
         fields = {
-            "Type": f"Consolidated Report | {item['region']}",
+            "Type": record_type,
             "Date": item["date"],
-            "Attachments": record_attachments,
+            "Attachments": attachments,
             "Cloud ID": item["url"]
         }
-        
-        gallery_items = item.get("galleries", [])
+
         for i in range(1, 4):
-            if len(gallery_items) >= i:
-                fields[f"Gallery {i}"] = gallery_items[i-1]["url"]
-        
-        records_to_create.append({"fields": fields})
+            if len(item["galleries"]) >= i:
+                fields[f"Gallery {i}"] = item["galleries"][i-1]["url"]
 
-    payload = {"records": records_to_create}
+        records.append({"fields": fields})
+
+    payload = {"records": records}
     response = requests.post(url, headers=headers, json=payload)
-    
+
     if response.status_code == 200:
-        st.success(f"🎉 Successfully synced records!")
-        st.session_state.capture_results = None
+        st.success(f"🎉 Successfully created {len(records)} records")
     else:
-        st.error(f"❌ Sync Error: {response.text}")
+        st.error(response.text)
 
-# --- 4. USER INTERFACE ---
+# --- 6. STREAMLIT UI ---
 
-st.set_page_config(page_title="Airtable Automation Capture", layout="wide")
-st.title("🗺️ Bi-Weekly Report Automation")
+st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
+st.title("🗺️ Bi-Weekly Report Capture")
 
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
 
-url_input = st.text_input(
-    "Airtable Interface URL",
-    value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="url_input_v21"
-)
+url_input = st.text_input("Airtable Interface URL")
 
-col1, col2 = st.columns([1, 4])
-
-with col1:
-    if st.button("🚀 Run Capture", key="run_btn"):
-        if url_input:
-            st.session_state.capture_results = capture_regional_images(url_input)
-
-with col2:
-    if st.session_state.capture_results:
-        if st.button("📤 Upload to Airtable", key="upload_btn", type="primary"):
-            sync_to_airtable(st.session_state.capture_results)
+if st.button("🚀 Run Capture"):
+    if url_input:
+        st.session_state.capture_results = capture_regional_images(url_input)
 
 if st.session_state.capture_results:
     st.divider()
-    for item in st.session_state.capture_results:
-        with st.expander(f"Region: {item['region']}", expanded=True):
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                st.image(item["local_file"], caption="Main Summary")
-            with c2:
-                g_cols = st.columns(2)
-                for idx, gal in enumerate(item.get("galleries", [])):
-                    with g_cols[idx % 2]:
-                        st.image(gal["local"], caption=gal["label"])
+    st.info("👀 Previewing captured images")
+
+    cols = st.columns(len(st.session_state.capture_results))
+    for idx, item in enumerate(st.session_state.capture_results):
+        with cols[idx]:
+            st.subheader(item["region"])
+            st.image(item["local_file"], use_container_width=True)
+            for gal in item.get("galleries", []):
+                st.image(gal["local"], use_container_width=True)
+
+    if st.button("📤 Upload to Airtable", type="primary"):
+        sync_to_airtable(st.session_state.capture_results)
