@@ -36,6 +36,7 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        # Sufficiently wide viewport to allow Airtable to render all columns
         context = browser.new_context(viewport={'width': 1920, 'height': 3500})
         page = context.new_page()
         
@@ -81,7 +82,7 @@ def capture_regional_images(target_url):
                 tab_selector.click()
                 page.wait_for_timeout(4000) 
 
-                # 2. Width Detection
+                # 2. Dynamic Width Detection
                 detected_width = page.evaluate("""
                 () => {
                     const el = document.querySelector('[aria-label="Completed Request Gallery gallery"]') || 
@@ -114,7 +115,7 @@ def capture_regional_images(target_url):
                 if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
-                # OPTIMIZATION: Reduce quality to 60 for better compression
+                # OPTIMIZATION: Switched to JPG with 60% quality (Eco-mode) to target <500KB
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
                 
@@ -125,14 +126,14 @@ def capture_regional_images(target_url):
                     quality=60
                 )
 
-                # Cloudinary upload with aggressive optimization (quality: auto:eco)
+                # Cloudinary upload with auto-optimization (eco mode)
                 safe_date = capture_date.replace('-', '')
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
                     folder="airtableautomation",
                     public_id=f"{safe_region}-main-{safe_date}",
                     fetch_format="auto",
-                    quality="auto:eco" # More aggressive optimization
+                    quality="auto:eco"
                 )
                 
                 region_entry = {
@@ -188,7 +189,7 @@ def capture_regional_images(target_url):
                                 path=gal_filename, 
                                 clip=gal_info,
                                 type="jpeg",
-                                quality=60 # Reduced gallery quality as well
+                                quality=60
                             )
                             
                             gal_upload = cloudinary.uploader.upload(
@@ -245,25 +246,25 @@ def sync_to_airtable(data_list):
         base_type = item.get("header_id", "Consolidated Report")
         record_type = f"{base_type} | {item['region']}"
         safe_region = item['region'].lower().replace(' ', '-')
-        
-        # Attachments field still needs the object array format
-        all_attachments = [{"url": item["url"], "filename": f"{safe_region}-main.jpg"}]
+
+        # Constructing attachments as objects for the Attachments field
+        record_attachments = [{"url": item["url"], "filename": f"{safe_region}-main.jpg"}]
         for idx, gal in enumerate(item.get("galleries", [])):
-            all_attachments.append({"url": gal["url"], "filename": f"{safe_region}-gal-{idx+1}.jpg"})
+            record_attachments.append({"url": gal["url"], "filename": f"{safe_region}-gal-{idx+1}.jpg"})
             
         fields = {
             "Type": record_type,
             "Date": item["date"],
-            "Attachments": all_attachments,
-            # Cloud ID is updated here to be a simple string (Single Line Text)
+            "Attachments": record_attachments,
+            # Cloud ID is a Single Line Text field (Simple URL string)
             "Cloud ID": item["url"]
         }
         
-        gallery_items = item.get("galleries", [])
+        gallery_urls = [g["url"] for g in item.get("galleries", [])]
         for i in range(1, 4):
             field_name = f"Gallery {i}"
-            if len(gallery_items) >= i:
-                fields[field_name] = [{"url": gallery_items[i-1]["url"], "filename": f"{safe_region}-gal-{i}.jpg"}]
+            if len(gallery_urls) >= i:
+                fields[field_name] = [{"url": gallery_urls[i-1], "filename": f"{safe_region}-gal-{i}.jpg"}]
         
         records_to_create.append({"fields": fields})
 
@@ -288,7 +289,7 @@ if 'capture_results' not in st.session_state:
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v14"
+    key="fixed_url_input_v15"
 )
 
 col1, col2 = st.columns([1, 4])
