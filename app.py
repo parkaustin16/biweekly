@@ -36,14 +36,13 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Optimized viewport to handle height better without excessive strain
-        context = browser.new_context(viewport={'width': 1920, 'height': 2500})
+        context = browser.new_context(viewport={'width': 1920, 'height': 3500})
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
         page.goto(target_url, wait_until="networkidle")
         
-        # --- CLEANUP: REMOVE COOKIES & UI ELEMENTS ---
+        # --- CLEANUP: REMOVE COOKIES & SPECIFIC UI ELEMENTS ---
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -52,8 +51,8 @@ def capture_regional_images(target_url):
                     '[id*="cookie"]', 
                     '[class*="cookie"]',
                     '.banner-content',
-                    'header.flex.flex-none.items-center.width-full', 
-                    '.flex.items-center.py2.px2-and-half.border-bottom'
+                    'header.flex.flex-none.items-center.width-full', // Top Nav Bar
+                    '.flex.items-center.py2.px2-and-half.border-bottom' // Secondary Header Bar
                 ];
                 removeSelectors.forEach(selector => {
                     const elements = document.querySelectorAll(selector);
@@ -61,34 +60,33 @@ def capture_regional_images(target_url):
                 });
             }
         """)
+        page.wait_for_timeout(1000)
 
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
-            header_locator.wait_for(state="visible", timeout=5000)
+            header_locator.wait_for(state="visible", timeout=10000)
             raw_header = header_locator.inner_text()
             header_title = raw_header.split("|")[0].strip() if "|" in raw_header else raw_header.strip()
         except Exception:
-            pass 
+            pass # Silent fail to keep logs clean
 
         for region in regions:
-            # IMMEDIATE PROGRESS DISPLAY
             status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 **{region}**: In Progress...")
             
             try:
-                # 1. Navigate to Tab & FAST DATA REFRESH
+                # 1. Navigate to Tab & FORCE DATA REFRESH
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
-                # Faster trigger for lazy-loading charts
-                page.mouse.wheel(0, 500)
-                page.wait_for_timeout(800)
-                page.mouse.wheel(0, -500)
-                page.wait_for_timeout(1200) # Reduced from 2500ms
+                # Critical: Scroll down and back up to force charts to re-render
+                page.evaluate("window.scrollTo(0, 1000)")
+                page.wait_for_timeout(1500)
+                page.evaluate("window.scrollTo(0, 0)")
+                page.wait_for_timeout(2500) 
 
-                # 2. HIDE GALLERIES
+                # 2. HIDE GALLERIES FOR SUMMARY CAPTURE
                 page.evaluate("""
                     () => {
                         const hideElements = (labelText) => {
@@ -104,40 +102,54 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # 3. Dynamic Height Calculation (Optimized)
+                # 3. Dynamic Height & Width Calculation for Summary (TIGHT CROP + BUFFER)
                 calculated_layout = page.evaluate("""
                 () => {
                     const mainContent = document.querySelector('.interfaceContent') || document.body;
                     const rect = mainContent.getBoundingClientRect();
-                    const target = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'))
-                                       .find(h => h.innerText && h.innerText.toLowerCase().includes('master banner usage breakdown'));
                     
-                    let bottom = 2000;
+                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
+                    const target = headers.find(h => h.innerText && h.innerText.toLowerCase().includes('master banner usage breakdown'));
+                    
+                    let bottom = 2200;
                     if(target) {
                         const sectionContainer = target.closest('.width-full.rounded-big') || target.closest('[role="region"]') || target.parentElement;
-                        const markers = Array.from(sectionContainer.querySelectorAll('.chartContainer, .legend, svg, canvas'));
-                        if (markers.length > 0) {
-                            const bottoms = markers.map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                            bottom = Math.max(...bottoms) + 40; // Tiny buffer
+                        const items = Array.from(sectionContainer.querySelectorAll('.chartContainer, .legend, svg, canvas, [role="listitem"], .recordList'));
+                        
+                        if (items.length > 0) {
+                            const bottoms = items.map(el => el.getBoundingClientRect().bottom + window.scrollY);
+                            bottom = Math.max(...bottoms) + 60; // Increased buffer from 15 to 60 for better visual breathing room
                         } else {
                             bottom = sectionContainer.getBoundingClientRect().bottom + window.scrollY + 20;
                         }
                     }
-                    return { x: Math.max(0, rect.left), y: 0, width: rect.width > 500 ? rect.width : 1100, height: Math.floor(bottom) };
+
+                    return {
+                        x: Math.max(0, rect.left),
+                        y: 0,
+                        width: rect.width > 500 ? rect.width : 1100,
+                        height: Math.floor(bottom)
+                    };
                 }
                 """)
 
                 # 4. Main Summary Capture
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
-                page.screenshot(path=main_filename, clip=calculated_layout, type="jpeg", quality=80)
+                page.screenshot(
+                    path=main_filename, 
+                    clip=calculated_layout,
+                    type="jpeg",
+                    quality=85
+                )
 
                 safe_date = capture_date.replace('-', '')
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
                     folder="airtableautomation",
                     public_id=f"{safe_region}-main-{safe_date}",
-                    fetch_format="auto"
+                    fetch_format="auto",
+                    quality="auto:eco"
                 )
                 
                 region_entry = {
@@ -170,24 +182,38 @@ def capture_regional_images(target_url):
                             const el = document.querySelector('[aria-label*="{gallery_label}"]');
                             if (!el) return null;
                             const rect = el.getBoundingClientRect();
-                            return {{ x: Math.floor(rect.left), y: Math.floor(rect.top + window.scrollY), width: Math.floor(rect.width), height: Math.floor(rect.height) }};
+                            return {{
+                                x: Math.floor(rect.left),
+                                y: Math.floor(rect.top + window.scrollY),
+                                width: Math.floor(rect.width),
+                                height: Math.floor(rect.height)
+                            }};
                         }}
                         """
                         gal_info = page.evaluate(container_js)
                         if not gal_info: break
 
+                        if gallery_label == "In Progress":
+                            status_placeholder.write(f"🔄 **{region}**: In Progress...")
+                        
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(600) # Reduced wait
+                        page.wait_for_timeout(1000)
 
                         safe_label = gallery_label.lower().replace(' ', '-')
                         gal_filename = f"{safe_region}-{safe_label}-{page_idx}.jpg"
-                        page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=60)
+                        page.screenshot(
+                            path=gal_filename, 
+                            clip=gal_info,
+                            type="jpeg",
+                            quality=65
+                        )
                         
                         gal_upload = cloudinary.uploader.upload(
                             gal_filename,
                             folder="airtableautomation",
                             public_id=f"{safe_region}-{safe_label}{page_idx}-{safe_date}",
-                            fetch_format="auto"
+                            fetch_format="auto",
+                            quality="auto:eco"
                         )
 
                         region_entry[storage_key].append({
@@ -201,21 +227,20 @@ def capture_regional_images(target_url):
                             if not is_disabled:
                                 next_btn.click()
                                 page_idx += 1
-                                page.wait_for_timeout(2500) 
+                                page.wait_for_timeout(4000) 
                             else: break
                         else: break
                         if page_idx > 5: break
 
+                # 5. Capture Galleries
                 if region != "All Regions":
                     capture_paged_gallery("Completed Request Gallery", "completed_gallery_pages")
                     capture_paged_gallery("In Progress", "in_progress_pages")
 
                 captured_data.append(region_entry)
-                # UPDATED STATUS MESSAGE
                 status_placeholder.write(f"✅ **{region}** captured.")
                 
             except Exception as e:
-                status_placeholder.write(f"❌ **{region}**: Error occurred.")
                 st.error(f"Error on {region}: {e}")
 
         browser.close()
@@ -265,7 +290,6 @@ def sync_to_airtable(data_list):
     if response.status_code == 200:
         st.success(f"🎉 Successfully created {len(records_to_create)} individual regional records!")
         st.session_state.capture_results = None
-        st.rerun()
     else:
         st.error(f"❌ Sync Error: {response.text}")
 
@@ -279,18 +303,14 @@ if 'capture_results' not in st.session_state:
 
 url_input = st.text_input("Airtable Interface URL", value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj")
 
-# Button Layout: Buttons side-by-side
-btn_col1, btn_col2, btn_spacer = st.columns([1, 1, 4])
-
-with btn_col1:
+col1, col2 = st.columns([1, 4])
+with col1:
     if st.button("🚀 Run Capture"):
         if url_input:
-            st.session_state.capture_results = None
             results = capture_regional_images(url_input)
             st.session_state.capture_results = results
-            st.rerun()
 
-with btn_col2:
+with col2:
     if st.session_state.capture_results:
         if st.button("📤 Upload to Airtable", type="primary"):
             sync_to_airtable(st.session_state.capture_results)
@@ -305,11 +325,13 @@ if st.session_state.capture_results:
     for idx, item in enumerate(st.session_state.capture_results):
         with preview_cols[idx]:
             st.markdown(f"### {item['region']}")
-            if os.path.exists(item["local_file"]):
-                st.image(item["local_file"], use_container_width=True)
+            
+            # Show summary image
+            st.image(item["local_file"], use_container_width=True)
+            
+            # Show gallery images without captions
             for page in item.get("completed_gallery_pages", []):
-                if os.path.exists(page["local"]):
-                    st.image(page["local"], use_container_width=True)
+                st.image(page["local"], use_container_width=True)
+
             for page in item.get("in_progress_pages", []):
-                if os.path.exists(page["local"]):
-                    st.image(page["local"], use_container_width=True)
+                st.image(page["local"], use_container_width=True)
