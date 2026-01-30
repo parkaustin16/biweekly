@@ -82,9 +82,7 @@ def capture_regional_images(target_url):
                 tab_selector.click()
                 page.wait_for_timeout(4000) 
 
-                # 2. Dynamic Width Detection (based on Gallery or Container)
-                # We fetch the width of the gallery container even if we aren't capturing it yet,
-                # to ensure the main summary matches the exact width of the content below it.
+                # 2. Dynamic Width Detection
                 detected_width = page.evaluate("""
                 () => {
                     const el = document.querySelector('[aria-label="Completed Request Gallery gallery"]') || 
@@ -93,7 +91,6 @@ def capture_regional_images(target_url):
                     return el ? el.getBoundingClientRect().width : 1600;
                 }
                 """)
-                # Add a small buffer to the detected width
                 capture_width = int(detected_width) + 40
 
                 # 3. Main Summary Capture
@@ -119,8 +116,6 @@ def capture_regional_images(target_url):
                     clip_height = min(int(calculated_height), 3400) 
                 
                 main_filename = f"{region.lower().replace(' ', '')}_main.png"
-                
-                # Apply the detected width to the main interface capture
                 page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': capture_width, 'height': clip_height})
 
                 upload_res = cloudinary.uploader.upload(
@@ -254,6 +249,8 @@ def sync_to_airtable(data_list):
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
         st.success(f"🎉 Record created with {len(all_attachments)} images!")
+        # Clear results from state after successful upload if desired
+        st.session_state.capture_results = None
     else:
         st.error(f"❌ Sync Error: {response.text}")
     return response.json()
@@ -263,22 +260,37 @@ def sync_to_airtable(data_list):
 st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
 st.title("🗺️ Bi-Weekly Report Capture")
 
+# Initialize session state for results
+if 'capture_results' not in st.session_state:
+    st.session_state.capture_results = None
+
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v5"
+    key="fixed_url_input_v6"
 )
 
-if st.button("🚀 Run Capture", key="fixed_run_btn_v5"):
-    if url_input:
-        results = capture_regional_images(url_input)
-        if results:
-            sync_to_airtable(results)
-            st.divider()
-            cols = st.columns(len(results))
-            for idx, item in enumerate(results):
-                with cols[idx]:
-                    st.subheader(item["region"])
-                    st.image(item["local_file"])
-                    for gal in item.get("galleries", []):
-                        st.image(gal["local"])
+col1, col2 = st.columns([1, 4])
+
+with col1:
+    if st.button("🚀 Run Capture", key="run_capture_btn"):
+        if url_input:
+            results = capture_regional_images(url_input)
+            st.session_state.capture_results = results
+
+with col2:
+    if st.session_state.capture_results:
+        if st.button("📤 Upload to Airtable", key="upload_airtable_btn", type="primary"):
+            sync_to_airtable(st.session_state.capture_results)
+
+# Preview Results
+if st.session_state.capture_results:
+    st.divider()
+    st.info("👀 Previewing Captured Images below. Review then click 'Upload to Airtable' above.")
+    cols = st.columns(len(st.session_state.capture_results))
+    for idx, item in enumerate(st.session_state.capture_results):
+        with cols[idx]:
+            st.subheader(item["region"])
+            st.image(item["local_file"], use_container_width=True)
+            for gal in item.get("galleries", []):
+                st.image(gal["local"], caption="Gallery Detail", use_container_width=True)
