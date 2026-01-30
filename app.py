@@ -62,7 +62,7 @@ def capture_regional_images(target_url):
             try:
                 # 1. Navigation
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
-                tab_selector.wait_for(state="visible", timeout=5000)
+                tab_selector.wait_for(state="visible", timeout=10000)
                 tab_selector.click()
                 page.wait_for_timeout(4000) 
 
@@ -134,7 +134,7 @@ def capture_regional_images(target_url):
 
                         # Scroll section into view for rendering
                         page.mouse.wheel(0, sec_info['y'] - 100)
-                        page.wait_for_timeout(1000)
+                        page.wait_for_timeout(1500)
 
                         sec_slug = section_name.lower().replace(' ', '-')
                         gal_filename = f"{safe_region}-{sec_slug}-{page_num}.jpg"
@@ -160,31 +160,39 @@ def capture_regional_images(target_url):
                             "label": f"{section_name} P{page_num}"
                         })
 
-                        # Pagination Check - Corrected native JS selector
-                        next_btn_js = f"""
+                        # Pagination Check - Improved Logic to find the button
+                        next_btn_check_js = f"""
                         () => {{
                             const h2s = Array.from(document.querySelectorAll('h2'));
                             const header = h2s.find(h => h.innerText.trim() === "{section_name}");
                             if (!header) return false;
                             const container = header.closest('.interfaceControl') || header.parentElement.parentElement;
-                            
-                            // Native JS check for button with 'Next' text
                             const buttons = Array.from(container.querySelectorAll('div[role="button"]'));
                             const btn = buttons.find(b => b.innerText.includes('Next'));
                             
-                            if (btn && btn.getAttribute('aria-disabled') !== 'true') {{
-                                return true;
-                            }}
-                            return false;
+                            return (btn && 
+                                    btn.getAttribute('aria-disabled') !== 'true' && 
+                                    window.getComputedStyle(btn).display !== 'none' &&
+                                    window.getComputedStyle(btn).visibility !== 'hidden');
                         }}
                         """
-                        has_next = page.evaluate(next_btn_js)
+                        has_next = page.evaluate(next_btn_check_js)
                         
                         if has_next:
-                            # Select the Next button specifically within this section's container
-                            page.locator(f"div:has(> h2:text-is('{section_name}'))").locator('div[role="button"]:has-text("Next")').first.click()
-                            page.wait_for_timeout(3000)
-                            page_num += 1
+                            # Robust locator: Find the header, then find the Next button in its parent container
+                            try:
+                                section_container = page.locator(f"div.interfaceControl:has(h2:text-is('{section_name}'))").first
+                                next_button = section_container.locator('div[role="button"]:has-text("Next")').first
+                                
+                                # Ensure it's ready for action
+                                next_button.wait_for(state="visible", timeout=5000)
+                                next_button.click(timeout=10000)
+                                
+                                page.wait_for_timeout(3000)
+                                page_num += 1
+                            except Exception as click_err:
+                                st.warning(f"Pagination stop for {section_name}: Button found but not clickable.")
+                                break
                         else:
                             break
 
