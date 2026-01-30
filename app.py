@@ -98,7 +98,7 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # 3. Dynamic Height & Width Calculation for Summary (TIGHTENED)
+                # 3. Dynamic Height & Width Calculation for Summary (AGGRESSIVE CROP)
                 calculated_layout = page.evaluate("""
                 () => {
                     const mainContent = document.querySelector('.interfaceContent') || document.body;
@@ -109,18 +109,23 @@ def capture_regional_images(target_url):
                     
                     let bottom = 2200;
                     if(target) {
-                        // Find the specific container holding the breakdown data
-                        const container = target.closest('.width-full') || target.parentElement;
-                        const bounds = container.getBoundingClientRect();
-                        // Reduced padding from +200 to +20 to remove whitespace
-                        bottom = bounds.bottom + window.scrollY + 20;
+                        // We find the parent container that houses the chart and the legend
+                        const sectionContainer = target.closest('.width-full.rounded-big') || target.closest('[role="region"]') || target.parentElement;
+                        
+                        // Look for all items inside this container to find the absolute lowest point (legend or chart)
+                        const subElements = Array.from(sectionContainer.querySelectorAll('*'));
+                        const bottoms = subElements.map(el => el.getBoundingClientRect().bottom + window.scrollY);
+                        
+                        // Find the max bottom of any visible element within that specific breakdown block
+                        const maxBottom = Math.max(...bottoms);
+                        bottom = maxBottom + 10; // Only 10px buffer to be safe
                     }
 
                     return {
                         x: Math.max(0, rect.left),
                         y: 0,
                         width: rect.width > 500 ? rect.width : 1100,
-                        height: Math.min(bottom, 3500)
+                        height: Math.floor(bottom)
                     };
                 }
                 """)
