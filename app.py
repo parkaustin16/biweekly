@@ -160,15 +160,17 @@ def capture_regional_images(target_url):
                             "label": f"{section_name} P{page_num}"
                         })
 
-                        # Pagination Check
+                        # Pagination Check - Corrected native JS selector
                         next_btn_js = f"""
                         () => {{
                             const h2s = Array.from(document.querySelectorAll('h2'));
                             const header = h2s.find(h => h.innerText.trim() === "{section_name}");
                             if (!header) return false;
                             const container = header.closest('.interfaceControl') || header.parentElement.parentElement;
-                            const btn = container.querySelector('div[role="button"]:has-text("Next")') || 
-                                        container.querySelector('div[role="button"]:has(span:has-text("Next"))');
+                            
+                            // Native JS check for button with 'Next' text
+                            const buttons = Array.from(container.querySelectorAll('div[role="button"]'));
+                            const btn = buttons.find(b => b.innerText.includes('Next'));
                             
                             if (btn && btn.getAttribute('aria-disabled') !== 'true') {{
                                 return true;
