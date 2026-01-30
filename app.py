@@ -36,12 +36,31 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width': 1000, 'height': 3500})
+        # Increased viewport width to 1400 to prevent horizontal cutting
+        context = browser.new_context(viewport={'width': 1400, 'height': 3500})
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
         page.goto(target_url, wait_until="networkidle")
         
+        # --- REMOVE COOKIES & BANNERS ---
+        page.evaluate("""
+            () => {
+                const removeSelectors = [
+                    '#onetrust-banner-sdk', 
+                    '.onetrust-pc-dark-filter',
+                    '[id*="cookie"]', 
+                    '[class*="cookie"]',
+                    '.banner-content'
+                ];
+                removeSelectors.forEach(selector => {
+                    const el = document.querySelector(selector);
+                    if (el) el.remove();
+                });
+            }
+        """)
+        page.wait_for_timeout(1000)
+
         # Header Extraction
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
@@ -50,7 +69,7 @@ def capture_regional_images(target_url):
             raw_header = header_locator.inner_text()
             header_title = raw_header.split("|")[0].strip() if "|" in raw_header else raw_header.strip()
         except Exception:
-            st.warning("Header load timed out, using default title.")
+            st.warning("Header load timed out.")
 
         for region in regions:
             status_placeholder = st.empty()
@@ -86,7 +105,8 @@ def capture_regional_images(target_url):
                     clip_height = min(int(calculated_height), 3400) 
                 
                 main_filename = f"{region.lower().replace(' ', '')}_main.png"
-                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 850, 'height': clip_height})
+                # Use x:0, width:1200 to ensure full horizontal content is captured
+                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 1200, 'height': clip_height})
 
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
@@ -111,7 +131,6 @@ def capture_regional_images(target_url):
                     while True:
                         status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
                         
-                        # Find the gallery container coordinates using valid JS selectors
                         container_js = """
                         () => {
                             let el = document.querySelector('[aria-label="Completed Request Gallery gallery"]');
@@ -136,7 +155,10 @@ def capture_regional_images(target_url):
                             status_placeholder.write(f"⚠️ **{region}**: Gallery container not found.")
                             break
                         
-                        # Capture ONLY the gallery box area
+                        # Move viewport to gallery box to ensure visibility
+                        page.mouse.wheel(0, gal_info['y'] - 100)
+                        page.wait_for_timeout(1000)
+
                         gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
                         page.screenshot(path=gal_filename, clip=gal_info)
                         
@@ -151,23 +173,17 @@ def capture_regional_images(target_url):
                             "url": gal_upload["secure_url"]
                         })
 
-                        # Pagination check using Playwright Locators (supports :has and svg paths)
-                        # Target the Next button specifically within that gallery label
                         next_btn = page.locator('[aria-label*="Completed Request Gallery"] div[role="button"]:has(path[d*="m4.64.17"])').first
                         
-                        # Check if Next button exists and is enabled
                         is_visible = next_btn.is_visible()
-                        is_disabled = False
                         if is_visible:
-                            # Check for disabled attributes or specific styles you noted
-                            attr_disabled = next_btn.get_attribute("aria-disabled") == "true"
-                            opacity = next_btn.evaluate("el => window.getComputedStyle(el).opacity")
-                            is_disabled = attr_disabled or opacity == "0.5"
-
-                        if is_visible and not is_disabled:
-                            next_btn.click()
-                            page.wait_for_timeout(4000) 
-                            gallery_count += 1
+                            is_disabled = next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true' || window.getComputedStyle(el).opacity === '0.5'")
+                            if not is_disabled:
+                                next_btn.click()
+                                page.wait_for_timeout(4000) 
+                                gallery_count += 1
+                            else:
+                                break
                         else:
                             break
                             
@@ -231,10 +247,10 @@ st.title("🗺️ Bi-Weekly Report Capture")
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v2"
+    key="fixed_url_input_v3"
 )
 
-if st.button("🚀 Run Capture", key="fixed_run_btn"):
+if st.button("🚀 Run Capture", key="fixed_run_btn_v3"):
     if url_input:
         results = capture_regional_images(url_input)
         if results:
