@@ -42,7 +42,7 @@ def capture_regional_images(target_url):
         st.info("🔗 Connecting to Airtable Interface...")
         page.goto(target_url, wait_until="networkidle")
         
-        # --- CLEANUP: REMOVE COOKIES & GLOBAL OVERLAYS ---
+        # --- CLEANUP: REMOVE COOKIES & SPECIFIC UI ELEMENTS ---
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -50,11 +50,13 @@ def capture_regional_images(target_url):
                     '.onetrust-pc-dark-filter',
                     '[id*="cookie"]', 
                     '[class*="cookie"]',
-                    '.banner-content'
+                    '.banner-content',
+                    'header.flex.flex-none.items-center.width-full', // Top Nav Bar
+                    '.flex.items-center.py2.px2-and-half.border-bottom' // Secondary Header Bar
                 ];
                 removeSelectors.forEach(selector => {
-                    const el = document.querySelector(selector);
-                    if (el) el.remove();
+                    const elements = document.querySelectorAll(selector);
+                    elements.forEach(el => el.remove());
                 });
             }
         """)
@@ -258,7 +260,6 @@ def sync_to_airtable(data_list):
             "Cloud ID": item["url"]
         }
         
-        # Flatten all gallery pages for the Gallery 1-3 fields if needed
         all_gal_urls = [p["url"] for p in item.get("in_progress_pages", [])] + \
                        [p["url"] for p in item.get("completed_gallery_pages", [])]
 
@@ -300,20 +301,23 @@ with col2:
 
 if st.session_state.capture_results:
     st.divider()
-    st.info("👀 Reviewing Captured Images. Summary -> In Progress -> Completed Gallery.")
+    st.info("👀 Reviewing Captured Images. Regions are side-by-side.")
     
-    for item in st.session_state.capture_results:
-        st.subheader(f"Region: {item['region']}")
-        
-        st.caption("Summary")
-        st.image(item["local_file"], width=800)
-        
-        for i, page in enumerate(item.get("in_progress_pages", [])):
-            st.caption(f"In Progress Page {i+1}")
-            st.image(page["local"], width=800)
+    # Create columns dynamically based on number of regions captured
+    n_cols = len(st.session_state.capture_results)
+    preview_cols = st.columns(n_cols)
+    
+    for idx, item in enumerate(st.session_state.capture_results):
+        with preview_cols[idx]:
+            st.markdown(f"### {item['region']}")
             
-        for i, page in enumerate(item.get("completed_gallery_pages", [])):
-            st.caption(f"Completed Gallery Page {i+1}")
-            st.image(page["local"], width=800)
+            st.caption("Summary")
+            st.image(item["local_file"], use_container_width=True)
             
-        st.divider()
+            for i, page in enumerate(item.get("in_progress_pages", [])):
+                st.caption(f"In Progress P{i+1}")
+                st.image(page["local"], use_container_width=True)
+                
+            for i, page in enumerate(item.get("completed_gallery_pages", [])):
+                st.caption(f"Completed Gallery P{i+1}")
+                st.image(page["local"], use_container_width=True)
