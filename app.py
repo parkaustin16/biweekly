@@ -36,8 +36,8 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Increased viewport width to 1400 to prevent horizontal cutting
-        context = browser.new_context(viewport={'width': 1400, 'height': 3500})
+        # Increased viewport width further to 1600 to provide more breathing room for wide interfaces
+        context = browser.new_context(viewport={'width': 1600, 'height': 3500})
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
@@ -105,8 +105,8 @@ def capture_regional_images(target_url):
                     clip_height = min(int(calculated_height), 3400) 
                 
                 main_filename = f"{region.lower().replace(' ', '')}_main.png"
-                # Use x:0, width:1200 to ensure full horizontal content is captured
-                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 1200, 'height': clip_height})
+                # Increased capture width to 1400 to prevent cutting off the right side
+                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 1400, 'height': clip_height})
 
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
