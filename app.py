@@ -201,7 +201,8 @@ def capture_regional_images(target_url):
                         else:
                             break
                             
-                        if gallery_count > 15: break 
+                        # Limiting to 3 as requested by the gallery field structure (1 to 3)
+                        if gallery_count > 3: break 
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured.")
@@ -221,12 +222,21 @@ def sync_to_airtable(data_list):
     
     if not data_list: return None
 
+    # Helper to find the main capture URL for a region
     def get_url(region_name):
         for item in data_list:
             if item["region"] == region_name:
                 return item["url"]
         return ""
 
+    # Helper to find gallery URLs for a region
+    def get_gallery_urls(region_name):
+        for item in data_list:
+            if item["region"] == region_name:
+                return [g["url"] for g in item.get("galleries", [])]
+        return []
+
+    # Aggregate all images for the master "Attachments" field
     all_attachments = []
     for item in data_list:
         all_attachments.append({"url": item["url"]})
@@ -237,19 +247,28 @@ def sync_to_airtable(data_list):
         "Type": data_list[0].get("header_id", "Consolidated Report"), 
         "Date": data_list[0]["date"],
         "Attachments": all_attachments,
-        "Cloud ID 1": get_url("All Regions"),
-        "Cloud ID 2": get_url("Asia"),
-        "Cloud ID 3": get_url("Europe"),
-        "Cloud ID 4": get_url("LATAM"),
-        "Cloud ID 5": get_url("Canada")
+        # Updated Field Names
+        "All Regions": get_url("All Regions"),
+        "Asia": get_url("Asia"),
+        "Europe": get_url("Europe"),
+        "LATAM": get_url("LATAM"),
+        "Canada": get_url("Canada")
     }
+
+    # Dynamic mapping for Gallery fields (Asia 1-3, Europe 1-3, etc.)
+    region_map = ["Asia", "Europe", "LATAM", "Canada"]
+    for reg in region_map:
+        urls = get_gallery_urls(reg)
+        for i in range(1, 4): # Fields 1, 2, and 3
+            field_name = f"Gallery {reg} {i}"
+            if len(urls) >= i:
+                fields[field_name] = urls[i-1]
     
     payload = {"records": [{"fields": fields}]}
 
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
         st.success(f"🎉 Record created with {len(all_attachments)} images!")
-        # Clear results from state after successful upload if desired
         st.session_state.capture_results = None
     else:
         st.error(f"❌ Sync Error: {response.text}")
@@ -260,14 +279,13 @@ def sync_to_airtable(data_list):
 st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
 st.title("🗺️ Bi-Weekly Report Capture")
 
-# Initialize session state for results
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
 
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v6"
+    key="fixed_url_input_v7"
 )
 
 col1, col2 = st.columns([1, 4])
@@ -283,7 +301,6 @@ with col2:
         if st.button("📤 Upload to Airtable", key="upload_airtable_btn", type="primary"):
             sync_to_airtable(st.session_state.capture_results)
 
-# Preview Results
 if st.session_state.capture_results:
     st.divider()
     st.info("👀 Previewing Captured Images below. Review then click 'Upload to Airtable' above.")
@@ -293,4 +310,4 @@ if st.session_state.capture_results:
             st.subheader(item["region"])
             st.image(item["local_file"], use_container_width=True)
             for gal in item.get("galleries", []):
-                st.image(gal["local"], caption="Gallery Detail", use_container_width=True)
+                st.image(gal["local"], caption=f"Gallery Image", use_container_width=True)
