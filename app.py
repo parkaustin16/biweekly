@@ -76,11 +76,16 @@ def capture_regional_images(target_url):
             status_placeholder.write(f"🔄 **{region}**: Processing...")
             
             try:
-                # 1. Navigate to Tab
+                # 1. Navigate to Tab & FORCE DATA REFRESH
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
-                page.wait_for_timeout(4000) 
+                
+                # Critical: Scroll down and back up to force charts to re-render for this specific region
+                page.evaluate("window.scrollTo(0, 1000)")
+                page.wait_for_timeout(1500)
+                page.evaluate("window.scrollTo(0, 0)")
+                page.wait_for_timeout(2500) # Increased wait for data stability
 
                 # 2. HIDE GALLERIES FOR SUMMARY CAPTURE
                 page.evaluate("""
@@ -98,7 +103,7 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # 3. Dynamic Height & Width Calculation for Summary (AGGRESSIVE CROP)
+                # 3. Dynamic Height & Width Calculation for Summary (TIGHT CROP)
                 calculated_layout = page.evaluate("""
                 () => {
                     const mainContent = document.querySelector('.interfaceContent') || document.body;
@@ -109,16 +114,18 @@ def capture_regional_images(target_url):
                     
                     let bottom = 2200;
                     if(target) {
-                        // We find the parent container that houses the chart and the legend
                         const sectionContainer = target.closest('.width-full.rounded-big') || target.closest('[role="region"]') || target.parentElement;
                         
-                        // Look for all items inside this container to find the absolute lowest point (legend or chart)
-                        const subElements = Array.from(sectionContainer.querySelectorAll('*'));
-                        const bottoms = subElements.map(el => el.getBoundingClientRect().bottom + window.scrollY);
+                        // We find all interactive elements inside the breakdown section (charts, legends, lists)
+                        const items = Array.from(sectionContainer.querySelectorAll('.chartContainer, .legend, svg, canvas, [role="listitem"], .recordList'));
                         
-                        // Find the max bottom of any visible element within that specific breakdown block
-                        const maxBottom = Math.max(...bottoms);
-                        bottom = maxBottom + 10; // Only 10px buffer to be safe
+                        if (items.length > 0) {
+                            const bottoms = items.map(el => el.getBoundingClientRect().bottom + window.scrollY);
+                            bottom = Math.max(...bottoms) + 15; // Minimal buffer
+                        } else {
+                            // Fallback if specific classes aren't found
+                            bottom = sectionContainer.getBoundingClientRect().bottom + window.scrollY - 10;
+                        }
                     }
 
                     return {
