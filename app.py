@@ -62,7 +62,7 @@ def capture_regional_images(target_url):
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
-                page.wait_for_timeout(3000) 
+                page.wait_for_timeout(3500) 
 
                 # 2. DYNAMIC SIZING LOGIC (Main Report)
                 clip_height = 2420 
@@ -91,11 +91,11 @@ def capture_regional_images(target_url):
                 if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
-                # Scroll to load
+                # Scroll to load main area
                 page.mouse.wheel(0, clip_height)
                 page.wait_for_timeout(1000)
                 page.mouse.wheel(0, -clip_height)
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(800)
 
                 # Capture Main Summary
                 main_filename = f"{region.lower().replace(' ', '')}_main.png"
@@ -114,34 +114,43 @@ def capture_regional_images(target_url):
                     "date": capture_date,
                     "header_id": header_title,
                     "height": clip_height,
-                    "galleries": [] # Store additional page screenshots here
+                    "galleries": [] 
                 }
 
-                # 3. GALLERY CAPTURE LOGIC (Skip for All Regions)
+                # 3. IMPROVED GALLERY CAPTURE LOGIC (Skip for All Regions)
                 if region != "All Regions":
                     gallery_count = 1
+                    
+                    # Target the gallery specifically
+                    gallery_header_selector = "div:has-text('Completed Request Gallery')"
+                    
                     while True:
-                        status_placeholder.write(f"🔄 **{region}**: Checking Gallery Page {gallery_count}...")
+                        status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
                         
-                        # Find the gallery section
+                        # Find gallery dimensions and pagination state
                         gallery_js = """
                         () => {
-                            const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
+                            const headers = Array.from(document.querySelectorAll('div, h1, h2, h3'));
                             const galHeader = headers.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
                             if (!galHeader) return null;
                             
                             const container = galHeader.closest('.interfaceControl') || galHeader.parentElement;
                             const rect = container.getBoundingClientRect();
                             
-                            // Look for the "Next" button in the pagination
+                            // Specific check for Airtable's next button classes
                             const nextBtn = container.querySelector('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])');
-                            const isLastPage = nextBtn ? nextBtn.disabled : true;
+                            
+                            // Check if disabled or if we're on the last page of X/Y
+                            let isLastPage = true;
+                            if (nextBtn) {
+                                isLastPage = nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true';
+                            }
 
                             return {
-                                x: rect.left,
-                                y: rect.top + window.scrollY,
-                                width: rect.width,
-                                height: rect.height,
+                                x: Math.floor(rect.left),
+                                y: Math.floor(rect.top + window.scrollY),
+                                width: Math.floor(rect.width),
+                                height: Math.floor(rect.height),
                                 isLastPage: isLastPage
                             };
                         }
@@ -151,11 +160,20 @@ def capture_regional_images(target_url):
                         if not gal_info:
                             break
                         
+                        # Scroll the gallery container into view and wiggle to trigger lazy load
+                        page.mouse.wheel(0, gal_info['y'] - 100)
+                        page.wait_for_timeout(1000)
+
                         # Capture current gallery page
                         gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
                         page.screenshot(
                             path=gal_filename,
-                            clip={'x': 0, 'y': gal_info['y'], 'width': 800, 'height': gal_info['height']}
+                            clip={
+                                'x': gal_info['x'], 
+                                'y': gal_info['y'], 
+                                'width': gal_info['width'], 
+                                'height': gal_info['height']
+                            }
                         )
                         
                         gal_upload = cloudinary.uploader.upload(
@@ -172,11 +190,16 @@ def capture_regional_images(target_url):
                         if gal_info['isLastPage']:
                             break
                         
-                        # Click Next and wait
-                        page.locator('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])').first.click()
-                        page.wait_for_timeout(2000)
-                        gallery_count += 1
-                        if gallery_count > 10: break # Safety break
+                        # Click Next and wait for content transition
+                        next_button = page.locator('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])').first
+                        if next_button.is_visible():
+                            next_button.click()
+                            page.wait_for_timeout(2500) # Increased wait for gallery refresh
+                            gallery_count += 1
+                        else:
+                            break
+                            
+                        if gallery_count > 15: break # Safety limit
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured.")
@@ -202,7 +225,6 @@ def sync_to_airtable(data_list):
                 return item["url"]
         return ""
 
-    # Attachments include main screens and all gallery pages
     all_attachments = []
     for item in data_list:
         all_attachments.append({"url": item["url"]})
