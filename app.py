@@ -32,11 +32,9 @@ def capture_regional_images(target_url):
     regions = ["Asia", "Europe", "LATAM", "Canada", "All Regions"]
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
-    header_title = "Consolidated Report"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Wide viewport to ensure layout doesn't stack vertically
         context = browser.new_context(viewport={'width': 1920, 'height': 5000})
         page = context.new_page()
         
@@ -69,15 +67,17 @@ def capture_regional_images(target_url):
                 safe_region = region.lower().replace(' ', '-')
                 safe_date = capture_date.replace('-', '')
 
-                # --- 2. MAIN SUMMARY (Clipped at Master Banner Usage Breakdown) ---
+                # --- 2. MAIN SUMMARY (Clipped to include full Master Banner Usage Breakdown card) ---
                 summary_clip_js = """
                 () => {
                     const h2s = Array.from(document.querySelectorAll('h2'));
                     const target = h2s.find(h => h.innerText.includes('Master Banner Usage Breakdown'));
-                    if (!target) return 2200;
-                    const container = target.closest('.interfaceControl') || target.parentElement;
-                    const rect = container.getBoundingClientRect();
-                    return Math.floor(rect.bottom + window.scrollY + 20);
+                    if (!target) return 2400; // Fallback height
+                    
+                    // Look for the specific container described in the request
+                    const card = target.closest('div[role="button"]') || target.closest('.interfaceControl') || target.parentElement;
+                    const rect = card.getBoundingClientRect();
+                    return Math.floor(rect.bottom + window.scrollY + 25);
                 }
                 """
                 summary_height = page.evaluate(summary_clip_js)
@@ -87,7 +87,7 @@ def capture_regional_images(target_url):
                     path=main_filename, 
                     clip={'x': 0, 'y': 0, 'width': 1920, 'height': summary_height},
                     type="jpeg",
-                    quality=55 # Aggressive compression for <500kb
+                    quality=55
                 )
 
                 main_upload = cloudinary.uploader.upload(
@@ -106,13 +106,13 @@ def capture_regional_images(target_url):
                     "galleries": [] 
                 }
 
-                # --- 3. PAGINATED SECTION CAPTURE (Completed Request & In Progress) ---
+                # --- 3. PAGINATED SECTION CAPTURE (Uniform Logic for both) ---
                 sections_to_capture = ["Completed Request Gallery", "In Progress"]
                 
                 for section_name in sections_to_capture:
                     page_num = 1
-                    while page_num <= 5: # Safety limit for pages
-                        # Find section coordinates
+                    while page_num <= 5: 
+                        # Use the "width-full rounded-big" container logic for precise section shots
                         section_js = f"""
                         () => {{
                             const h2s = Array.from(document.querySelectorAll('h2'));
@@ -132,7 +132,6 @@ def capture_regional_images(target_url):
                         if not sec_info:
                             break
 
-                        # Scroll section into view for rendering
                         page.mouse.wheel(0, sec_info['y'] - 100)
                         page.wait_for_timeout(1500)
 
@@ -160,7 +159,7 @@ def capture_regional_images(target_url):
                             "label": f"{section_name} P{page_num}"
                         })
 
-                        # Pagination Check - Improved Logic to find the button
+                        # Pagination Detection
                         next_btn_check_js = f"""
                         () => {{
                             const h2s = Array.from(document.querySelectorAll('h2'));
@@ -179,19 +178,18 @@ def capture_regional_images(target_url):
                         has_next = page.evaluate(next_btn_check_js)
                         
                         if has_next:
-                            # Robust locator: Find the header, then find the Next button in its parent container
                             try:
                                 section_container = page.locator(f"div.interfaceControl:has(h2:text-is('{section_name}'))").first
                                 next_button = section_container.locator('div[role="button"]:has-text("Next")').first
                                 
-                                # Ensure it's ready for action
-                                next_button.wait_for(state="visible", timeout=5000)
-                                next_button.click(timeout=10000)
+                                next_button.scroll_into_view_if_needed()
+                                # Use force=True to bypass any invisible overlay issues
+                                next_button.click(force=True, timeout=10000)
                                 
                                 page.wait_for_timeout(3000)
                                 page_num += 1
                             except Exception as click_err:
-                                st.warning(f"Pagination stop for {section_name}: Button found but not clickable.")
+                                st.warning(f"Stopping {section_name} at page {page_num}: {click_err}")
                                 break
                         else:
                             break
@@ -214,7 +212,6 @@ def sync_to_airtable(data_list):
     
     records_to_create = []
     for item in data_list:
-        # All images go into native Attachments
         record_attachments = [{"url": item["url"]}]
         for gal in item.get("galleries", []):
             record_attachments.append({"url": gal["url"]})
@@ -226,7 +223,6 @@ def sync_to_airtable(data_list):
             "Cloud ID": item["url"]
         }
         
-        # Distribute the first 3 sub-captures to Gallery 1, 2, 3 text fields
         gallery_items = item.get("galleries", [])
         for i in range(1, 4):
             if len(gallery_items) >= i:
@@ -254,7 +250,7 @@ if 'capture_results' not in st.session_state:
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="url_input_v20"
+    key="url_input_v21"
 )
 
 col1, col2 = st.columns([1, 4])
