@@ -81,19 +81,16 @@ def capture_regional_images(target_url):
                 page.wait_for_timeout(4000) 
 
                 # 2. HIDE GALLERY FOR SUMMARY CAPTURE
-                # FIXED: Removed non-standard :has-text selectors that break in page.evaluate
                 page.evaluate("""
                     () => {
                         const galleryAttr = '[aria-label="Completed Request Gallery gallery"]';
                         const el = document.querySelector(galleryAttr);
                         if (el) {
                             el.style.display = 'none';
-                            // Try to find the parent container card to hide the whole white box
                             const container = el.closest('.width-full.rounded-big');
                             if (container) container.style.display = 'none';
                         }
                         
-                        // Fallback: search for header text manually
                         const h2s = Array.from(document.querySelectorAll('h2'));
                         const galHeader = h2s.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
                         if (galHeader) {
@@ -125,12 +122,12 @@ def capture_regional_images(target_url):
                 calculated_height = page.evaluate(dynamic_js)
                 clip_height = min(int(calculated_height), 3400) if (calculated_height and calculated_height > 100) else 2000
 
-                # 4. Main Summary Capture
+                # 4. Main Summary Capture - Restored to Gallery Dimensions (1100px width)
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
                 page.screenshot(
                     path=main_filename, 
-                    clip={'x': 0, 'y': 0, 'width': 1650, 'height': clip_height},
+                    clip={'x': 0, 'y': 0, 'width': 1100, 'height': clip_height},
                     type="jpeg",
                     quality=85
                 )
@@ -323,26 +320,20 @@ if st.session_state.capture_results:
     st.divider()
     st.info("👀 Reviewing Captured Images. Summary -> Gallery Page 1 -> Remaining Pages.")
     
-    # Restored to original grid-style UI as requested
+    # Restored to vertical stacked preview as requested
     for item in st.session_state.capture_results:
         st.subheader(f"Region: {item['region']}")
         
-        # Calculate how many columns we need (Summary + P1 + others)
-        extra_pages = item.get("galleries", [])
-        num_cols = 2 + len(extra_pages)
-        cols = st.columns(num_cols)
-        
-        with cols[0]:
-            st.caption("Summary")
-            st.image(item["local_file"])
+        # Display images stacked on top of one another
+        st.caption("Summary")
+        st.image(item["local_file"], width=800)
         
         if item.get("gallery_p1"):
-            with cols[1]:
-                st.caption("Gallery Pg 1")
-                st.image(item["gallery_p1"]["local"])
+            st.caption("Gallery Page 1")
+            st.image(item["gallery_p1"]["local"], width=800)
         
-        for i, gal in enumerate(extra_pages):
-            with cols[i + 2]:
-                st.caption(f"Gallery Pg {i+2}")
-                st.image(gal["local"])
+        for i, gal in enumerate(item.get("galleries", [])):
+            st.caption(f"Gallery Page {i+2}")
+            st.image(gal["local"], width=800)
+            
         st.divider()
