@@ -115,7 +115,7 @@ def capture_regional_images(target_url):
                 if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
-                # Optimized Naming & Format: Switched to JPG with 80% quality for smaller files
+                # Optimized Naming & Format
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
                 
@@ -126,7 +126,7 @@ def capture_regional_images(target_url):
                     quality=80
                 )
 
-                # Cloudinary upload with auto-optimization to ensure size is minimized
+                # Cloudinary upload with auto-optimization
                 safe_date = capture_date.replace('-', '')
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
@@ -184,7 +184,6 @@ def capture_regional_images(target_url):
                             page.mouse.wheel(0, gal_info['y'] - 100)
                             page.wait_for_timeout(1000)
 
-                            # Optimizing Gallery Images as well
                             gal_filename = f"{safe_region}-gal-{gallery_count}.jpg"
                             page.screenshot(
                                 path=gal_filename, 
@@ -221,7 +220,6 @@ def capture_regional_images(target_url):
                         else:
                             break
                             
-                        # Limiting to 3 as requested by the gallery field structure (1 to 3)
                         if gallery_count > 3: break 
 
                 captured_data.append(region_entry)
@@ -242,37 +240,34 @@ def sync_to_airtable(data_list):
     
     if not data_list: return None
 
-    # We will create one record for each region entry in data_list
     records_to_create = []
     
     for item in data_list:
-        # Construct dynamic type title
         base_type = item.get("header_id", "Consolidated Report")
         record_type = f"{base_type} | {item['region']}"
         
-        # Collect all attachments for this specific record
+        # Consistent Attachment mapping
+        main_image_attachment = [{"url": item["url"]}]
         record_attachments = [{"url": item["url"]}]
         for gal in item.get("galleries", []):
             record_attachments.append({"url": gal["url"]})
             
-        # Build field map
         fields = {
             "Type": record_type,
             "Date": item["date"],
             "Attachments": record_attachments,
-            "Cloud ID": item["url"]
+            # IMPORTANT: Mapping Cloud ID as an attachment list for better Automation compatibility
+            "Cloud ID": main_image_attachment
         }
         
-        # Add Gallery 1, 2, 3 if they exist for this region
         gallery_urls = [g["url"] for g in item.get("galleries", [])]
         for i in range(1, 4):
             field_name = f"Gallery {i}"
             if len(gallery_urls) >= i:
-                fields[field_name] = gallery_urls[i-1]
+                fields[field_name] = [{"url": gallery_urls[i-1]}]
         
         records_to_create.append({"fields": fields})
 
-    # Airtable allows batch creation of up to 10 records per request
     payload = {"records": records_to_create}
 
     response = requests.post(url, headers=headers, json=payload)
@@ -294,7 +289,7 @@ if 'capture_results' not in st.session_state:
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v10"
+    key="fixed_url_input_v11"
 )
 
 col1, col2 = st.columns([1, 4])
