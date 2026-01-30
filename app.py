@@ -55,50 +55,32 @@ def capture_regional_images(target_url):
 
         for region in regions:
             status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 **{region}**: Finding dynamic boundary...")
+            status_placeholder.write(f"🔄 **{region}**: Capturing Summary & Galleries...")
             
             try:
                 # 1. Navigate to Tab
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
-                
-                # Wait for content to settle after tab click
                 page.wait_for_timeout(3000) 
 
-                # 2. UPDATED DYNAMIC SIZING LOGIC
-                clip_height = 2420 # Default fallback
+                # 2. DYNAMIC SIZING LOGIC (Main Report)
+                clip_height = 2420 
                 
                 dynamic_js = """
                 () => {
                     const findBottom = () => {
-                        // 1. Find the section containing "In Progress"
                         const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
                         const targetHeader = headers.find(h => 
-                            h.innerText && 
-                            h.innerText.trim().toLowerCase() === 'in progress'
+                            h.innerText && h.innerText.trim().toLowerCase() === 'in progress'
                         );
-                        
                         if (!targetHeader) return null;
-
-                        // 2. Identify the likely container for the grid/list under this header
-                        // We look for the sibling container or the shared parent's data area
-                        let container = targetHeader.closest('[role="region"]') || 
-                                        targetHeader.closest('.interfaceControl') || 
-                                        targetHeader.parentElement;
-                        
-                        // 3. Find boxes that contain records/numbers
-                        // We target common Airtable class patterns or generic card-like structures
+                        let container = targetHeader.closest('[role="region"]') || targetHeader.closest('.interfaceControl') || targetHeader.parentElement;
                         const boxes = Array.from(container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"], [role="button"]'));
-                        
                         if (boxes.length > 0) {
-                            // Find the box with the highest 'bottom' value to ensure we don't cut off
                             const bottoms = boxes.map(b => b.getBoundingClientRect().bottom + window.scrollY);
-                            const maxBottom = Math.max(...bottoms);
-                            return maxBottom + 40; // Add 40px buffer
+                            return Math.max(...bottoms) + 40;
                         }
-                        
-                        // Fallback to the header itself if no boxes found
                         return targetHeader.getBoundingClientRect().bottom + window.scrollY + 400;
                     };
                     return findBottom();
@@ -109,36 +91,95 @@ def capture_regional_images(target_url):
                 if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
-                # 3. Optimized Scroll to trigger lazy loading
-                # Scroll down to the calculated height to ensure images load
+                # Scroll to load
                 page.mouse.wheel(0, clip_height)
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(1000)
                 page.mouse.wheel(0, -clip_height)
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(500)
 
-                # 4. Capture
-                filename = f"{region.lower().replace(' ', '')}snap.png"
-                page.screenshot(
-                    path=filename,
-                    clip={'x': 0, 'y': 0, 'width': 800, 'height': clip_height}
-                )
+                # Capture Main Summary
+                main_filename = f"{region.lower().replace(' ', '')}_main.png"
+                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 800, 'height': clip_height})
 
-                # 5. Upload to Cloudinary
                 upload_res = cloudinary.uploader.upload(
-                    filename, 
+                    main_filename, 
                     folder="airtableautomation",
-                    public_id=f"{region.lower().replace(' ', '')}{capture_date.replace('-', '')}"
+                    public_id=f"{region.lower().replace(' ', '')}_main_{capture_date.replace('-', '')}"
                 )
                 
-                captured_data.append({
+                region_entry = {
                     "region": region,
                     "url": upload_res["secure_url"],
-                    "local_file": filename,
+                    "local_file": main_filename,
                     "date": capture_date,
                     "header_id": header_title,
-                    "height": clip_height
-                })
-                status_placeholder.write(f"✅ **{region}** captured at {clip_height}px height.")
+                    "height": clip_height,
+                    "galleries": [] # Store additional page screenshots here
+                }
+
+                # 3. GALLERY CAPTURE LOGIC (Skip for All Regions)
+                if region != "All Regions":
+                    gallery_count = 1
+                    while True:
+                        status_placeholder.write(f"🔄 **{region}**: Checking Gallery Page {gallery_count}...")
+                        
+                        # Find the gallery section
+                        gallery_js = """
+                        () => {
+                            const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
+                            const galHeader = headers.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
+                            if (!galHeader) return null;
+                            
+                            const container = galHeader.closest('.interfaceControl') || galHeader.parentElement;
+                            const rect = container.getBoundingClientRect();
+                            
+                            // Look for the "Next" button in the pagination
+                            const nextBtn = container.querySelector('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])');
+                            const isLastPage = nextBtn ? nextBtn.disabled : true;
+
+                            return {
+                                x: rect.left,
+                                y: rect.top + window.scrollY,
+                                width: rect.width,
+                                height: rect.height,
+                                isLastPage: isLastPage
+                            };
+                        }
+                        """
+                        gal_info = page.evaluate(gallery_js)
+                        
+                        if not gal_info:
+                            break
+                        
+                        # Capture current gallery page
+                        gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
+                        page.screenshot(
+                            path=gal_filename,
+                            clip={'x': 0, 'y': gal_info['y'], 'width': 800, 'height': gal_info['height']}
+                        )
+                        
+                        gal_upload = cloudinary.uploader.upload(
+                            gal_filename,
+                            folder="airtableautomation",
+                            public_id=f"{region.lower().replace(' ', '')}_gal{gallery_count}_{capture_date.replace('-', '')}"
+                        )
+                        
+                        region_entry["galleries"].append({
+                            "local": gal_filename,
+                            "url": gal_upload["secure_url"]
+                        })
+
+                        if gal_info['isLastPage']:
+                            break
+                        
+                        # Click Next and wait
+                        page.locator('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])').first.click()
+                        page.wait_for_timeout(2000)
+                        gallery_count += 1
+                        if gallery_count > 10: break # Safety break
+
+                captured_data.append(region_entry)
+                status_placeholder.write(f"✅ **{region}** captured.")
                 
             except Exception as e:
                 st.error(f"Error on {region}: {e}")
@@ -161,7 +202,12 @@ def sync_to_airtable(data_list):
                 return item["url"]
         return ""
 
-    all_attachments = [{"url": item["url"]} for item in data_list]
+    # Attachments include main screens and all gallery pages
+    all_attachments = []
+    for item in data_list:
+        all_attachments.append({"url": item["url"]})
+        for gal in item.get("galleries", []):
+            all_attachments.append({"url": gal["url"]})
     
     fields = {
         "Type": data_list[0].get("header_id", "Consolidated Report"), 
@@ -178,7 +224,7 @@ def sync_to_airtable(data_list):
 
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        st.success(f"🎉 Consolidated record created with Cloud ID mappings!")
+        st.success(f"🎉 Consolidated record created with {len(all_attachments)} images!")
     else:
         st.error(f"❌ Sync Error: {response.text}")
     return response.json()
@@ -187,7 +233,7 @@ def sync_to_airtable(data_list):
 
 st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
 st.title("🗺️ Bi-Weekly Report Capture")
-st.caption("Now with dynamic cropping based on 'In Progress' section contents.")
+st.caption("Captures Summary + Multi-page Completed Request Galleries.")
 
 url_input = st.text_input(
     "Airtable Interface URL",
@@ -200,9 +246,19 @@ if st.button("🚀 Run Dynamic Capture & Sync"):
         if results:
             sync_to_airtable(results)
             st.divider()
+            
+            # Display results in columns
             cols = st.columns(len(results))
             for idx, item in enumerate(results):
                 with cols[idx]:
-                    st.image(item["local_file"], caption=f"{item['region']} ({item['height']}px)")
+                    # Main Summary
+                    st.subheader(item["region"])
+                    st.image(item["local_file"], caption=f"Summary ({item['height']}px)")
                     if os.path.exists(item["local_file"]):
                         os.remove(item["local_file"])
+                    
+                    # Gallery Pages
+                    for g_idx, gal in enumerate(item.get("galleries", [])):
+                        st.image(gal["local"], caption=f"Gallery Page {g_idx+1}")
+                        if os.path.exists(gal["local"]):
+                            os.remove(gal["local"])
