@@ -67,33 +67,24 @@ def capture_regional_images(target_url):
                 clip_height = 2420 
                 dynamic_js = """
                 () => {
-                    const findBottom = () => {
-                        const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
-                        const targetHeader = headers.find(h => 
-                            h.innerText && h.innerText.trim().toLowerCase() === 'in progress'
-                        );
-                        if (!targetHeader) return null;
-                        let container = targetHeader.closest('[role="region"]') || targetHeader.closest('.interfaceControl') || targetHeader.parentElement;
-                        const boxes = Array.from(container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"], [role="button"]'));
-                        if (boxes.length > 0) {
-                            const bottoms = boxes.map(b => b.getBoundingClientRect().bottom + window.scrollY);
-                            return Math.max(...bottoms) + 40;
-                        }
-                        return targetHeader.getBoundingClientRect().bottom + window.scrollY + 400;
-                    };
-                    return findBottom();
+                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
+                    const targetHeader = headers.find(h => 
+                        h.innerText && h.innerText.trim().toLowerCase() === 'in progress'
+                    );
+                    if (!targetHeader) return null;
+                    let container = targetHeader.closest('[role="region"]') || targetHeader.closest('.interfaceControl') || targetHeader.parentElement;
+                    const boxes = Array.from(container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"], [role="button"]'));
+                    if (boxes.length > 0) {
+                        const bottoms = boxes.map(b => b.getBoundingClientRect().bottom + window.scrollY);
+                        return Math.max(...bottoms) + 40;
+                    }
+                    return targetHeader.getBoundingClientRect().bottom + window.scrollY + 400;
                 }
                 """
                 calculated_height = page.evaluate(dynamic_js)
                 if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
-                # Scroll and snap main summary
-                page.mouse.wheel(0, clip_height)
-                page.wait_for_timeout(1000)
-                page.mouse.wheel(0, -clip_height)
-                page.wait_for_timeout(800)
-
                 main_filename = f"{region.lower().replace(' ', '')}_main.png"
                 page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 850, 'height': clip_height})
 
@@ -120,67 +111,34 @@ def capture_regional_images(target_url):
                     while True:
                         status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
                         
-                        # Target precisely the "Completed Request Gallery" container
-                        gallery_js = """
+                        # Find the gallery container coordinates using valid JS selectors
+                        container_js = """
                         () => {
-                            const findGalleryContainer = () => {
-                                // Priority 1: aria-label targeting
-                                let el = document.querySelector('[aria-label="Completed Request Gallery gallery"]');
-                                
-                                // Priority 2: Header text targeting
-                                if (!el) {
-                                    const headers = Array.from(document.querySelectorAll('h2'));
-                                    const galHeader = headers.find(h => h.innerText && h.innerText.trim() === 'Completed Request Gallery');
-                                    if (galHeader) {
-                                        el = galHeader.closest('.width-full.rounded-big') || galHeader.parentElement.parentElement;
-                                    }
-                                }
-
-                                if (!el) return null;
-                                
-                                const rect = el.getBoundingClientRect();
-                                
-                                // Specific logic for "Next" button within this container
-                                const nextBtn = el.querySelector('div[role="button"]:has(path[d*="m4.64.17"]), div[role="button"]:has-text("Next")');
-                                
-                                // Check if disabled
-                                const isLastPage = !nextBtn || 
-                                                   nextBtn.getAttribute('aria-disabled') === 'true' || 
-                                                   nextBtn.classList.contains('opacity-low') ||
-                                                   nextBtn.style.opacity === '0.5';
-                                
-                                return {
-                                    x: Math.floor(rect.left),
-                                    y: Math.floor(rect.top + window.scrollY),
-                                    width: Math.floor(rect.width),
-                                    height: Math.floor(rect.height),
-                                    isLastPage: isLastPage
-                                };
+                            let el = document.querySelector('[aria-label="Completed Request Gallery gallery"]');
+                            if (!el) {
+                                const h2s = Array.from(document.querySelectorAll('h2'));
+                                const galHeader = h2s.find(h => h.innerText && h.innerText.trim() === 'Completed Request Gallery');
+                                if (galHeader) el = galHeader.closest('.width-full.rounded-big') || galHeader.parentElement.parentElement;
+                            }
+                            if (!el) return null;
+                            const rect = el.getBoundingClientRect();
+                            return {
+                                x: Math.floor(rect.left),
+                                y: Math.floor(rect.top + window.scrollY),
+                                width: Math.floor(rect.width),
+                                height: Math.floor(rect.height)
                             };
-                            return findGalleryContainer();
                         }
                         """
-                        gal_info = page.evaluate(gallery_js)
+                        gal_info = page.evaluate(container_js)
                         
                         if not gal_info:
-                            status_placeholder.write(f"⚠️ **{region}**: 'Completed Request Gallery' container not found.")
+                            status_placeholder.write(f"⚠️ **{region}**: Gallery container not found.")
                             break
                         
-                        # Focus the view on the gallery box
-                        page.mouse.wheel(0, gal_info['y'] - 50)
-                        page.wait_for_timeout(2000)
-
                         # Capture ONLY the gallery box area
                         gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
-                        page.screenshot(
-                            path=gal_filename,
-                            clip={
-                                'x': gal_info['x'], 
-                                'y': gal_info['y'], 
-                                'width': gal_info['width'], 
-                                'height': gal_info['height']
-                            }
-                        )
+                        page.screenshot(path=gal_filename, clip=gal_info)
                         
                         gal_upload = cloudinary.uploader.upload(
                             gal_filename,
@@ -193,14 +151,20 @@ def capture_regional_images(target_url):
                             "url": gal_upload["secure_url"]
                         })
 
-                        if gal_info['isLastPage']:
-                            break
-
-                        # Click Next button restricted to the container
-                        next_btn_selector = '[aria-label*="Completed Request Gallery"] div[role="button"]:has(path[d*="m4.64.17"])'
-                        next_btn = page.locator(next_btn_selector).first
+                        # Pagination check using Playwright Locators (supports :has and svg paths)
+                        # Target the Next button specifically within that gallery label
+                        next_btn = page.locator('[aria-label*="Completed Request Gallery"] div[role="button"]:has(path[d*="m4.64.17"])').first
                         
-                        if next_btn.is_visible():
+                        # Check if Next button exists and is enabled
+                        is_visible = next_btn.is_visible()
+                        is_disabled = False
+                        if is_visible:
+                            # Check for disabled attributes or specific styles you noted
+                            attr_disabled = next_btn.get_attribute("aria-disabled") == "true"
+                            opacity = next_btn.evaluate("el => window.getComputedStyle(el).opacity")
+                            is_disabled = attr_disabled or opacity == "0.5"
+
+                        if is_visible and not is_disabled:
                             next_btn.click()
                             page.wait_for_timeout(4000) 
                             gallery_count += 1
@@ -254,7 +218,7 @@ def sync_to_airtable(data_list):
 
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        st.success(f"🎉 Consolidated record created with {len(all_attachments)} images!")
+        st.success(f"🎉 Record created with {len(all_attachments)} images!")
     else:
         st.error(f"❌ Sync Error: {response.text}")
     return response.json()
@@ -263,30 +227,23 @@ def sync_to_airtable(data_list):
 
 st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
 st.title("🗺️ Bi-Weekly Report Capture")
-st.caption("Captures Summary + Multi-page Completed Request Galleries.")
 
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="airtable_url_input_unique"
+    key="fixed_url_input_v2"
 )
 
-if st.button("🚀 Run Dynamic Capture & Sync", key="main_run_btn"):
+if st.button("🚀 Run Capture", key="fixed_run_btn"):
     if url_input:
         results = capture_regional_images(url_input)
         if results:
             sync_to_airtable(results)
             st.divider()
-            
             cols = st.columns(len(results))
             for idx, item in enumerate(results):
                 with cols[idx]:
                     st.subheader(item["region"])
-                    st.image(item["local_file"], caption="Main Summary")
-                    if os.path.exists(item["local_file"]):
-                        os.remove(item["local_file"])
-                    
-                    for g_idx, gal in enumerate(item.get("galleries", [])):
-                        st.image(gal["local"], caption=f"Gallery Page {g_idx+1}")
-                        if os.path.exists(gal["local"]):
-                            os.remove(gal["local"])
+                    st.image(item["local_file"])
+                    for gal in item.get("galleries", []):
+                        st.image(gal["local"])
