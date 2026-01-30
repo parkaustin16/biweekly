@@ -35,8 +35,12 @@ def capture_regional_images(target_url):
     header_title = "Consolidated Report"
 
     with sync_playwright() as p:
+        # Increase device_scale_factor for sharper text (Retina/High-DPI simulation)
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width': 1920, 'height': 3500})
+        context = browser.new_context(
+            viewport={'width': 1920, 'height': 3500},
+            device_scale_factor=2 
+        )
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
@@ -134,7 +138,7 @@ def capture_regional_images(target_url):
                 }
                 """)
 
-                # 4. Main Summary Capture
+                # 4. Main Summary Capture - Improved Quality (90)
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
                 
@@ -142,7 +146,7 @@ def capture_regional_images(target_url):
                     path=main_filename, 
                     clip=calculated_layout,
                     type="jpeg",
-                    quality=85
+                    quality=90 
                 )
 
                 safe_date = capture_date.replace('-', '')
@@ -151,7 +155,7 @@ def capture_regional_images(target_url):
                     folder="airtableautomation",
                     public_id=f"{safe_region}-main-{safe_date}",
                     fetch_format="auto",
-                    quality="auto:eco"
+                    quality="auto:good" # Changed from eco to good for better fidelity
                 )
                 
                 region_entry = {
@@ -204,7 +208,7 @@ def capture_regional_images(target_url):
                             path=gal_filename, 
                             clip=gal_info,
                             type="jpeg",
-                            quality=65
+                            quality=80 # Increased gallery quality
                         )
                         
                         gal_upload = cloudinary.uploader.upload(
@@ -212,7 +216,7 @@ def capture_regional_images(target_url):
                             folder="airtableautomation",
                             public_id=f"{safe_region}-{safe_label}{page_idx}-{safe_date}",
                             fetch_format="auto",
-                            quality="auto:eco"
+                            quality="auto:good"
                         )
 
                         region_entry[storage_key].append({
