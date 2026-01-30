@@ -19,12 +19,13 @@ def install_browser_binaries():
 install_browser_binaries()
 
 # --- 2. CONFIGURATION ---
-cloudinary.config(
-    cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
-    api_key = st.secrets["CLOUDINARY_API_KEY"],
-    api_secret = st.secrets["CLOUDINARY_API_SECRET"],
-    secure = True
-)
+if "CLOUDINARY_CLOUD_NAME" in st.secrets:
+    cloudinary.config(
+        cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
+        api_key = st.secrets["CLOUDINARY_API_KEY"],
+        api_secret = st.secrets["CLOUDINARY_API_SECRET"],
+        secure = True
+    )
 
 # --- 3. CORE LOGIC ---
 
@@ -74,7 +75,6 @@ def capture_regional_images(target_url):
                     const target = h2s.find(h => h.innerText.includes('Master Banner Usage Breakdown'));
                     if (!target) return 2400; // Fallback height
                     
-                    // Look for the specific container described in the request
                     const card = target.closest('div[role="button"]') || target.closest('.interfaceControl') || target.parentElement;
                     const rect = card.getBoundingClientRect();
                     return Math.floor(rect.bottom + window.scrollY + 25);
@@ -106,13 +106,12 @@ def capture_regional_images(target_url):
                     "galleries": [] 
                 }
 
-                # --- 3. PAGINATED SECTION CAPTURE (Uniform Logic for both) ---
+                # --- 3. PAGINATED SECTION CAPTURE ---
                 sections_to_capture = ["Completed Request Gallery", "In Progress"]
                 
                 for section_name in sections_to_capture:
                     page_num = 1
                     while page_num <= 5: 
-                        # Use the "width-full rounded-big" container logic for precise section shots
                         section_js = f"""
                         () => {{
                             const h2s = Array.from(document.querySelectorAll('h2'));
@@ -159,15 +158,17 @@ def capture_regional_images(target_url):
                             "label": f"{section_name} P{page_num}"
                         })
 
-                        # Pagination Detection
+                        # --- UPDATED PAGINATION LOGIC ---
+                        # Target the specific role="button" containing "Next" span
                         next_btn_check_js = f"""
                         () => {{
                             const h2s = Array.from(document.querySelectorAll('h2'));
                             const header = h2s.find(h => h.innerText.trim() === "{section_name}");
                             if (!header) return false;
                             const container = header.closest('.interfaceControl') || header.parentElement.parentElement;
-                            const buttons = Array.from(container.querySelectorAll('div[role="button"]'));
-                            const btn = buttons.find(b => b.innerText.includes('Next'));
+                            
+                            // Specific selector based on provided HTML structure
+                            const btn = container.querySelector('div[role="button"]:has(span:text-is("Next"))');
                             
                             return (btn && 
                                     btn.getAttribute('aria-disabled') !== 'true' && 
@@ -175,15 +176,17 @@ def capture_regional_images(target_url):
                                     window.getComputedStyle(btn).visibility !== 'hidden');
                         }}
                         """
+                        # Fallback for standard playwright locator if JS check passes
                         has_next = page.evaluate(next_btn_check_js)
                         
                         if has_next:
                             try:
+                                # Target the specific button inside the section's control area
                                 section_container = page.locator(f"div.interfaceControl:has(h2:text-is('{section_name}'))").first
-                                next_button = section_container.locator('div[role="button"]:has-text("Next")').first
+                                # Use the span text as the locator hook inside the button
+                                next_button = section_container.locator('div[role="button"]').filter(has=page.locator('span', has_text="Next")).first
                                 
                                 next_button.scroll_into_view_if_needed()
-                                # Use force=True to bypass any invisible overlay issues
                                 next_button.click(force=True, timeout=10000)
                                 
                                 page.wait_for_timeout(3000)
@@ -216,6 +219,8 @@ def sync_to_airtable(data_list):
         for gal in item.get("galleries", []):
             record_attachments.append({"url": gal["url"]})
             
+        # --- CLEAN RECORD TYPE STRING ---
+        # Removals are handled in the display name logic
         fields = {
             "Type": f"Consolidated Report | {item['region']}",
             "Date": item["date"],
