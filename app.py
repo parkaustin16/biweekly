@@ -249,22 +249,23 @@ def sync_to_airtable(data_list):
 
         # Constructing attachments as objects for the Attachments field
         record_attachments = [{"url": item["url"], "filename": f"{safe_region}-main.jpg"}]
-        for idx, gal in enumerate(item.get("galleries", [])):
+        gallery_items = item.get("galleries", [])
+        for idx, gal in enumerate(gallery_items):
             record_attachments.append({"url": gal["url"], "filename": f"{safe_region}-gal-{idx+1}.jpg"})
             
         fields = {
             "Type": record_type,
             "Date": item["date"],
             "Attachments": record_attachments,
-            # Cloud ID is a Single Line Text field (Simple URL string)
             "Cloud ID": item["url"]
         }
         
-        gallery_urls = [g["url"] for g in item.get("galleries", [])]
+        # Mapping Gallery slots carefully to avoid INVALID_VALUE_FOR_COLUMN
+        # Only add the field if the index exists to prevent sending empty/invalid data
         for i in range(1, 4):
             field_name = f"Gallery {i}"
-            if len(gallery_urls) >= i:
-                fields[field_name] = [{"url": gallery_urls[i-1], "filename": f"{safe_region}-gal-{i}.jpg"}]
+            if len(gallery_items) >= i:
+                fields[field_name] = [{"url": gallery_items[i-1]["url"], "filename": f"{safe_region}-gal-{i}.jpg"}]
         
         records_to_create.append({"fields": fields})
 
@@ -289,7 +290,7 @@ if 'capture_results' not in st.session_state:
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v15"
+    key="fixed_url_input_v16"
 )
 
 col1, col2 = st.columns([1, 4])
