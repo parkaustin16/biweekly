@@ -246,8 +246,7 @@ def sync_to_airtable(data_list):
         record_type = f"{base_type} | {item['region']}"
         safe_region = item['region'].lower().replace(' ', '-')
         
-        main_image_attachment = [{"url": item["url"], "filename": f"{safe_region}-main.jpg"}]
-        
+        # Attachments field still needs the object array format
         all_attachments = [{"url": item["url"], "filename": f"{safe_region}-main.jpg"}]
         for idx, gal in enumerate(item.get("galleries", [])):
             all_attachments.append({"url": gal["url"], "filename": f"{safe_region}-gal-{idx+1}.jpg"})
@@ -256,7 +255,8 @@ def sync_to_airtable(data_list):
             "Type": record_type,
             "Date": item["date"],
             "Attachments": all_attachments,
-            "Cloud ID": main_image_attachment
+            # Cloud ID is updated here to be a simple string (Single Line Text)
+            "Cloud ID": item["url"]
         }
         
         gallery_items = item.get("galleries", [])
@@ -288,7 +288,7 @@ if 'capture_results' not in st.session_state:
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v13"
+    key="fixed_url_input_v14"
 )
 
 col1, col2 = st.columns([1, 4])
