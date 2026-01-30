@@ -115,7 +115,7 @@ def capture_regional_images(target_url):
                 if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
-                # OPTIMIZATION: Switched to JPG with 60% quality (Eco-mode) to target <500KB
+                # OPTIMIZATION: Lower JPEG quality (55) for strict file size target (<500KB)
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
                 
@@ -123,10 +123,10 @@ def capture_regional_images(target_url):
                     path=main_filename, 
                     clip={'x': 0, 'y': 0, 'width': capture_width, 'height': clip_height},
                     type="jpeg",
-                    quality=60
+                    quality=55
                 )
 
-                # Cloudinary upload with auto-optimization (eco mode)
+                # Cloudinary upload with ECO optimization
                 safe_date = capture_date.replace('-', '')
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
@@ -189,7 +189,7 @@ def capture_regional_images(target_url):
                                 path=gal_filename, 
                                 clip=gal_info,
                                 type="jpeg",
-                                quality=60
+                                quality=55
                             )
                             
                             gal_upload = cloudinary.uploader.upload(
@@ -245,27 +245,27 @@ def sync_to_airtable(data_list):
     for item in data_list:
         base_type = item.get("header_id", "Consolidated Report")
         record_type = f"{base_type} | {item['region']}"
-        safe_region = item['region'].lower().replace(' ', '-')
-
-        # Constructing attachments as objects for the Attachments field
-        record_attachments = [{"url": item["url"], "filename": f"{safe_region}-main.jpg"}]
-        gallery_items = item.get("galleries", [])
-        for idx, gal in enumerate(gallery_items):
-            record_attachments.append({"url": gal["url"], "filename": f"{safe_region}-gal-{idx+1}.jpg"})
+        
+        # Attachments array for file fields (Assuming "Attachments" is an actual Attachment field)
+        record_attachments = [{"url": item["url"]}]
+        for gal in item.get("galleries", []):
+            record_attachments.append({"url": gal["url"]})
             
         fields = {
             "Type": record_type,
             "Date": item["date"],
             "Attachments": record_attachments,
+            # Cloud ID is a Single Line Text field (Simple string URL)
             "Cloud ID": item["url"]
         }
         
-        # Mapping Gallery slots carefully to avoid INVALID_VALUE_FOR_COLUMN
-        # Only add the field if the index exists to prevent sending empty/invalid data
+        # Gallery 1, 2, 3 are Single Line Text fields
+        gallery_items = item.get("galleries", [])
         for i in range(1, 4):
             field_name = f"Gallery {i}"
             if len(gallery_items) >= i:
-                fields[field_name] = [{"url": gallery_items[i-1]["url"], "filename": f"{safe_region}-gal-{i}.jpg"}]
+                # SEND AS STRING URL, NOT OBJECT ARRAY
+                fields[field_name] = gallery_items[i-1]["url"]
         
         records_to_create.append({"fields": fields})
 
@@ -290,7 +290,7 @@ if 'capture_results' not in st.session_state:
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v16"
+    key="fixed_url_input_v17"
 )
 
 col1, col2 = st.columns([1, 4])
