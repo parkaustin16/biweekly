@@ -36,8 +36,7 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Use a large initial height to allow for calculations
-        context = browser.new_context(viewport={'width': 800, 'height': 3500})
+        context = browser.new_context(viewport={'width': 1000, 'height': 3500})
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
@@ -64,9 +63,8 @@ def capture_regional_images(target_url):
                 tab_selector.click()
                 page.wait_for_timeout(4000) 
 
-                # 2. DYNAMIC SIZING LOGIC (Main Report)
+                # 2. Main Summary Capture
                 clip_height = 2420 
-                
                 dynamic_js = """
                 () => {
                     const findBottom = () => {
@@ -86,20 +84,18 @@ def capture_regional_images(target_url):
                     return findBottom();
                 }
                 """
-                
                 calculated_height = page.evaluate(dynamic_js)
                 if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
-                # Scroll to load main area
+                # Scroll and snap main summary
                 page.mouse.wheel(0, clip_height)
                 page.wait_for_timeout(1000)
                 page.mouse.wheel(0, -clip_height)
                 page.wait_for_timeout(800)
 
-                # Capture Main Summary
                 main_filename = f"{region.lower().replace(' ', '')}_main.png"
-                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 800, 'height': clip_height})
+                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 850, 'height': clip_height})
 
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
@@ -117,36 +113,41 @@ def capture_regional_images(target_url):
                     "galleries": [] 
                 }
 
-                # 3. UPDATED GALLERY CAPTURE LOGIC (Skip for All Regions)
+                # 3. CONFINED GALLERY CAPTURE LOGIC
                 if region != "All Regions":
                     gallery_count = 1
                     
                     while True:
                         status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
                         
-                        # Find gallery dimensions and pagination state
+                        # Target precisely the "Completed Request Gallery" container
                         gallery_js = """
                         () => {
-                            const findGallery = () => {
-                                const labels = Array.from(document.querySelectorAll('div, h1, h2, h3, h4'));
-                                const galHeader = labels.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
-                                if (!galHeader) return null;
+                            const findGalleryContainer = () => {
+                                // Priority 1: aria-label targeting
+                                let el = document.querySelector('[aria-label="Completed Request Gallery gallery"]');
                                 
-                                const container = galHeader.closest('.interfaceControl') || galHeader.parentElement;
-                                const rect = container.getBoundingClientRect();
+                                // Priority 2: Header text targeting
+                                if (!el) {
+                                    const headers = Array.from(document.querySelectorAll('h2'));
+                                    const galHeader = headers.find(h => h.innerText && h.innerText.trim() === 'Completed Request Gallery');
+                                    if (galHeader) {
+                                        el = galHeader.closest('.width-full.rounded-big') || galHeader.parentElement.parentElement;
+                                    }
+                                }
+
+                                if (!el) return null;
                                 
-                                // Specific search for the Next button div/svg structure provided
-                                const buttons = Array.from(container.querySelectorAll('div[role="button"]'));
-                                const nextBtn = buttons.find(b => 
-                                    (b.innerText && b.innerText.includes('Next')) || 
-                                    (b.querySelector('path[d*="m4.64.17"]'))
-                                );
+                                const rect = el.getBoundingClientRect();
                                 
-                                // Check if disabled - Airtable often removes the pointer class or adds opacity
+                                // Specific logic for "Next" button within this container
+                                const nextBtn = el.querySelector('div[role="button"]:has(path[d*="m4.64.17"]), div[role="button"]:has-text("Next")');
+                                
+                                // Check if disabled
                                 const isLastPage = !nextBtn || 
                                                    nextBtn.getAttribute('aria-disabled') === 'true' || 
                                                    nextBtn.classList.contains('opacity-low') ||
-                                                   !nextBtn.classList.contains('pointer');
+                                                   nextBtn.style.opacity === '0.5';
                                 
                                 return {
                                     x: Math.floor(rect.left),
@@ -156,27 +157,27 @@ def capture_regional_images(target_url):
                                     isLastPage: isLastPage
                                 };
                             };
-                            return findGallery();
+                            return findGalleryContainer();
                         }
                         """
                         gal_info = page.evaluate(gallery_js)
                         
                         if not gal_info:
-                            status_placeholder.write(f"⚠️ **{region}**: Gallery section not found.")
+                            status_placeholder.write(f"⚠️ **{region}**: 'Completed Request Gallery' container not found.")
                             break
                         
-                        # Ensure gallery is loaded and in view
-                        page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(2500)
+                        # Focus the view on the gallery box
+                        page.mouse.wheel(0, gal_info['y'] - 50)
+                        page.wait_for_timeout(2000)
 
-                        # Capture current gallery page
+                        # Capture ONLY the gallery box area
                         gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
                         page.screenshot(
                             path=gal_filename,
                             clip={
-                                'x': 0, 
+                                'x': gal_info['x'], 
                                 'y': gal_info['y'], 
-                                'width': 800, 
+                                'width': gal_info['width'], 
                                 'height': gal_info['height']
                             }
                         )
@@ -192,21 +193,21 @@ def capture_regional_images(target_url):
                             "url": gal_upload["secure_url"]
                         })
 
-                        # Pagination Logic
                         if gal_info['isLastPage']:
                             break
 
-                        # Click Next button using complex selector targeting the div structure provided
-                        next_btn_locator = page.locator('div[role="button"]:has-text("Next"), div[role="button"]:has(path[d*="m4.64.17"])').first
+                        # Click Next button restricted to the container
+                        next_btn_selector = '[aria-label*="Completed Request Gallery"] div[role="button"]:has(path[d*="m4.64.17"])'
+                        next_btn = page.locator(next_btn_selector).first
                         
-                        if next_btn_locator.is_visible():
-                            next_btn_locator.click()
-                            page.wait_for_timeout(4000) # Increased wait for gallery transition
+                        if next_btn.is_visible():
+                            next_btn.click()
+                            page.wait_for_timeout(4000) 
                             gallery_count += 1
                         else:
                             break
                             
-                        if gallery_count > 20: break # Increased limit for large galleries
+                        if gallery_count > 15: break 
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured.")
@@ -264,31 +265,27 @@ st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide"
 st.title("🗺️ Bi-Weekly Report Capture")
 st.caption("Captures Summary + Multi-page Completed Request Galleries.")
 
-# Added unique keys to solve StreamlitDuplicateElementId
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="airtable_url_input"
+    key="airtable_url_input_unique"
 )
 
-if st.button("🚀 Run Dynamic Capture & Sync", key="run_capture_button"):
+if st.button("🚀 Run Dynamic Capture & Sync", key="main_run_btn"):
     if url_input:
         results = capture_regional_images(url_input)
         if results:
             sync_to_airtable(results)
             st.divider()
             
-            # Display results in columns
             cols = st.columns(len(results))
             for idx, item in enumerate(results):
                 with cols[idx]:
-                    # Main Summary
                     st.subheader(item["region"])
-                    st.image(item["local_file"], caption=f"Summary ({item['height']}px)")
+                    st.image(item["local_file"], caption="Main Summary")
                     if os.path.exists(item["local_file"]):
                         os.remove(item["local_file"])
                     
-                    # Gallery Pages
                     for g_idx, gal in enumerate(item.get("galleries", [])):
                         st.image(gal["local"], caption=f"Gallery Page {g_idx+1}")
                         if os.path.exists(gal["local"]):
