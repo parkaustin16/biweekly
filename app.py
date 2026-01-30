@@ -123,7 +123,7 @@ def capture_regional_images(target_url):
                     path=main_filename, 
                     clip={'x': 0, 'y': 0, 'width': capture_width, 'height': clip_height},
                     type="jpeg",
-                    quality=55
+                    quality=80
                 )
 
                 # Cloudinary upload with ECO optimization
