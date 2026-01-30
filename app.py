@@ -62,44 +62,59 @@ def capture_regional_images(target_url):
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
+                
+                # Wait for content to settle after tab click
                 page.wait_for_timeout(3000) 
 
-                # 2. DYNAMIC SIZING LOGIC
+                # 2. UPDATED DYNAMIC SIZING LOGIC
                 clip_height = 2420 # Default fallback
                 
                 dynamic_js = """
                 () => {
-                    // 1. Find the section containing "In Progress"
-                    const headers = Array.from(document.querySelectorAll('h2, h3, .sectionHeader, div'));
-                    const targetHeader = headers.find(h => h.innerText && h.innerText.includes('In Progress'));
-                    
-                    if (!targetHeader) return null;
+                    const findBottom = () => {
+                        // 1. Find the section containing "In Progress"
+                        const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
+                        const targetHeader = headers.find(h => 
+                            h.innerText && 
+                            h.innerText.trim().toLowerCase() === 'in progress'
+                        );
+                        
+                        if (!targetHeader) return null;
 
-                    // 2. Find the parent container or the next sibling structure that holds the data
-                    let container = targetHeader.closest('.interfaceControl') || targetHeader.parentElement;
-                    
-                    // 3. Find all boxes that usually contain record counts
-                    const boxes = container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"]');
-                    
-                    if (boxes.length > 0) {
-                        const lastBox = boxes[boxes.length - 1];
-                        const rect = lastBox.getBoundingClientRect();
-                        return rect.bottom + window.scrollY + 20; // Add 20px padding
-                    }
-                    
-                    return targetHeader.getBoundingClientRect().bottom + window.scrollY + 500;
+                        // 2. Identify the likely container for the grid/list under this header
+                        // We look for the sibling container or the shared parent's data area
+                        let container = targetHeader.closest('[role="region"]') || 
+                                        targetHeader.closest('.interfaceControl') || 
+                                        targetHeader.parentElement;
+                        
+                        // 3. Find boxes that contain records/numbers
+                        // We target common Airtable class patterns or generic card-like structures
+                        const boxes = Array.from(container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"], [role="button"]'));
+                        
+                        if (boxes.length > 0) {
+                            // Find the box with the highest 'bottom' value to ensure we don't cut off
+                            const bottoms = boxes.map(b => b.getBoundingClientRect().bottom + window.scrollY);
+                            const maxBottom = Math.max(...bottoms);
+                            return maxBottom + 40; // Add 40px buffer
+                        }
+                        
+                        // Fallback to the header itself if no boxes found
+                        return targetHeader.getBoundingClientRect().bottom + window.scrollY + 400;
+                    };
+                    return findBottom();
                 }
                 """
                 
                 calculated_height = page.evaluate(dynamic_js)
-                if calculated_height:
+                if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
                 # 3. Optimized Scroll to trigger lazy loading
+                # Scroll down to the calculated height to ensure images load
                 page.mouse.wheel(0, clip_height)
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(1500)
                 page.mouse.wheel(0, -clip_height)
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(800)
 
                 # 4. Capture
                 filename = f"{region.lower().replace(' ', '')}snap.png"
