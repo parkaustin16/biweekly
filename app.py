@@ -1,4 +1,4 @@
-import streamlit as st
+import st
 import subprocess
 import os
 import requests
@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
 def install_browser_binaries():
-    """Ensures Chromium binaries are present. System deps are handled by packages.txt"""
+    """Ensures Chromium binaries are present."""
     try:
         subprocess.run(["playwright", "install", "chromium"], check=True)
     except Exception as e:
@@ -36,50 +36,83 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # 800x2700 viewport for the 2500 capture
-        context = browser.new_context(viewport={'width': 800, 'height': 2700})
+        # Use a large initial height to allow for calculations
+        context = browser.new_context(viewport={'width': 800, 'height': 3500})
         page = context.new_page()
         
-        st.info("🔗 Connecting...")
-        page.goto(target_url, wait_until="domcontentloaded")
+        st.info("🔗 Connecting to Airtable Interface...")
+        page.goto(target_url, wait_until="networkidle")
         
-        # Optimized Header Extraction: Dynamic wait instead of flat 7s sleep
+        # Header Extraction
         try:
-            # Look for h2 with the specific class or h1
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
             header_locator.wait_for(state="visible", timeout=10000)
-            
             raw_header = header_locator.inner_text()
             header_title = raw_header.split("|")[0].strip() if "|" in raw_header else raw_header.strip()
-        except Exception as e:
+        except Exception:
             st.warning("Header load timed out, using default title.")
 
         for region in regions:
             status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 **{region}**...")
+            status_placeholder.write(f"🔄 **{region}**: Finding dynamic boundary...")
             
             try:
+                # 1. Navigate to Tab
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
-                
-                # Reduced wait time: 3s is usually enough for data refresh on fast connections
                 page.wait_for_timeout(3000) 
+
+                # 2. DYNAMIC SIZING LOGIC
+                # We look for the container that has "In Progress" and find its bounding box
+                # We then find the last 'record count' box within that specific section
+                clip_height = 2420 # Default fallback
                 
-                # Snappier scroll sequence (reduced pauses)
-                page.mouse.wheel(0, 2420)
-                page.wait_for_timeout(800)
-                page.mouse.wheel(0, -2420)
+                dynamic_js = """
+                () => {
+                    // 1. Find the section containing "In Progress"
+                    const headers = Array.from(document.querySelectorAll('h2, h3, .sectionHeader, div'));
+                    const targetHeader = headers.find(h => h.innerText && h.innerText.includes('In Progress'));
+                    
+                    if (!targetHeader) return null;
+
+                    // 2. Find the parent container or the next sibling structure that holds the data
+                    let container = targetHeader.closest('.interfaceControl') || targetHeader.parentElement;
+                    
+                    // 3. Find all boxes that usually contain record counts (often have specific Airtable classes)
+                    // We look for elements that look like summary cards or grid items
+                    const boxes = container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"]');
+                    
+                    if (boxes.length > 0) {
+                        const lastBox = boxes[boxes.length - 1];
+                        const rect = lastBox.getBoundingClientRect();
+                        return rect.bottom + window.scrollY + 20; // Add 20px padding
+                    }
+                    
+                    // Fallback: just use the bottom of the "In Progress" container
+                    return targetHeader.getBoundingClientRect().bottom + window.scrollY + 500;
+                }
+                """
+                
+                calculated_height = page.evaluate(dynamic_js)
+                if calculated_height:
+                    clip_height = min(int(calculated_height), 3400) # Cap at 3400 to prevent errors
+                
+                # 3. Optimized Scroll to trigger lazy loading for the calculated area
+                page.mouse.wheel(0, clip_height)
+                page.wait_for_timeout(1000)
+                page.mouse.wheel(0, -clip_height)
                 page.wait_for_timeout(500)
 
+                # 4. Capture
                 filename = f"{region.lower().replace(' ', '')}snap.png"
                 page.screenshot(
                     path=filename,
-                    clip={'x': 0, 'y': 0, 'width': 800, 'height': 2420}
+                    clip={'x': 0, 'y': 0, 'width': 800, 'height': clip_height}
                 )
 
-                # Upload to Cloudinary
+                # 5. Upload to Cloudinary
                 upload_res = cloudinary.uploader.upload(
                     filename, 
                     folder="airtableautomation",
@@ -91,9 +124,10 @@ def capture_regional_images(target_url):
                     "url": upload_res["secure_url"],
                     "local_file": filename,
                     "date": capture_date,
-                    "header_id": header_title
+                    "header_id": header_title,
+                    "height": clip_height
                 })
-                status_placeholder.write(f"✅ **{region}** ready.")
+                status_placeholder.write(f"✅ **{region}** captured at {clip_height}px height.")
                 
             except Exception as e:
                 st.error(f"Error on {region}: {e}")
@@ -102,7 +136,6 @@ def capture_regional_images(target_url):
     return captured_data
 
 def sync_to_airtable(data_list):
-    """Sends all captured images to Airtable as a single consolidated record with specific Cloud ID mapping."""
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {
         "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
@@ -111,7 +144,6 @@ def sync_to_airtable(data_list):
     
     if not data_list: return None
 
-    # Helper function to find a URL by region name
     def get_url(region_name):
         for item in data_list:
             if item["region"] == region_name:
@@ -120,7 +152,6 @@ def sync_to_airtable(data_list):
 
     all_attachments = [{"url": item["url"]} for item in data_list]
     
-    # Mapping logic for specific Cloud ID fields
     fields = {
         "Type": data_list[0].get("header_id", "Consolidated Report"), 
         "Date": data_list[0]["date"],
@@ -132,11 +163,7 @@ def sync_to_airtable(data_list):
         "Cloud ID 5": get_url("Canada")
     }
     
-    payload = {
-        "records": [{
-            "fields": fields
-        }]
-    }
+    payload = {"records": [{"fields": fields}]}
 
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
@@ -149,13 +176,14 @@ def sync_to_airtable(data_list):
 
 st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
 st.title("🗺️ Bi-Weekly Report Capture")
+st.caption("Now with dynamic cropping based on 'In Progress' section contents.")
 
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj"
 )
 
-if st.button("🚀 Save and Email"):
+if st.button("🚀 Run Dynamic Capture & Sync"):
     if url_input:
         results = capture_regional_images(url_input)
         if results:
@@ -164,6 +192,6 @@ if st.button("🚀 Save and Email"):
             cols = st.columns(len(results))
             for idx, item in enumerate(results):
                 with cols[idx]:
-                    st.image(item["local_file"], caption=item["region"])
+                    st.image(item["local_file"], caption=f"{item['region']} ({item['height']}px)")
                     if os.path.exists(item["local_file"]):
                         os.remove(item["local_file"])
