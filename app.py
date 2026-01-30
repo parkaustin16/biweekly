@@ -69,11 +69,10 @@ def capture_regional_images(target_url):
             raw_header = header_locator.inner_text()
             header_title = raw_header.split("|")[0].strip() if "|" in raw_header else raw_header.strip()
         except Exception:
-            st.warning("Header load timed out.")
+            pass # Silent fail to keep logs clean
 
         for region in regions:
             status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 **{region}**: Processing...")
             
             try:
                 # 1. Navigate to Tab & FORCE DATA REFRESH
@@ -81,11 +80,11 @@ def capture_regional_images(target_url):
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
-                # Critical: Scroll down and back up to force charts to re-render for this specific region
+                # Critical: Scroll down and back up to force charts to re-render
                 page.evaluate("window.scrollTo(0, 1000)")
                 page.wait_for_timeout(1500)
                 page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(2500) # Increased wait for data stability
+                page.wait_for_timeout(2500) 
 
                 # 2. HIDE GALLERIES FOR SUMMARY CAPTURE
                 page.evaluate("""
@@ -103,7 +102,7 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # 3. Dynamic Height & Width Calculation for Summary (TIGHT CROP)
+                # 3. Dynamic Height & Width Calculation for Summary (TIGHT CROP + BUFFER)
                 calculated_layout = page.evaluate("""
                 () => {
                     const mainContent = document.querySelector('.interfaceContent') || document.body;
@@ -115,16 +114,13 @@ def capture_regional_images(target_url):
                     let bottom = 2200;
                     if(target) {
                         const sectionContainer = target.closest('.width-full.rounded-big') || target.closest('[role="region"]') || target.parentElement;
-                        
-                        // We find all interactive elements inside the breakdown section (charts, legends, lists)
                         const items = Array.from(sectionContainer.querySelectorAll('.chartContainer, .legend, svg, canvas, [role="listitem"], .recordList'));
                         
                         if (items.length > 0) {
                             const bottoms = items.map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                            bottom = Math.max(...bottoms) + 15; // Minimal buffer
+                            bottom = Math.max(...bottoms) + 60; // Increased buffer from 15 to 60 for better visual breathing room
                         } else {
-                            // Fallback if specific classes aren't found
-                            bottom = sectionContainer.getBoundingClientRect().bottom + window.scrollY - 10;
+                            bottom = sectionContainer.getBoundingClientRect().bottom + window.scrollY + 20;
                         }
                     }
 
@@ -197,7 +193,9 @@ def capture_regional_images(target_url):
                         gal_info = page.evaluate(container_js)
                         if not gal_info: break
 
-                        status_placeholder.write(f"📸 **{region}**: {gallery_label} Page {page_idx}...")
+                        if gallery_label == "In Progress":
+                            status_placeholder.write(f"🔄 **{region}**: In Progress...")
+                        
                         page.mouse.wheel(0, gal_info['y'] - 100)
                         page.wait_for_timeout(1000)
 
@@ -262,7 +260,6 @@ def sync_to_airtable(data_list):
         base_type = item.get("header_id", "Consolidated Report")
         record_type = f"{base_type} | {item['region']}"
         
-        # Combined attachments for the main field
         record_attachments = [{"url": item["url"]}]
         for page in item.get("completed_gallery_pages", []):
             record_attachments.append({"url": page["url"]})
@@ -276,13 +273,11 @@ def sync_to_airtable(data_list):
             "Cloud ID": item["url"]
         }
         
-        # Gallery 1-3 prioritization: Completed Gallery pages first
         completed_urls = [p["url"] for p in item.get("completed_gallery_pages", [])]
         for i in range(1, 4):
             if len(completed_urls) >= i:
                 fields[f"Gallery {i}"] = completed_urls[i-1]
 
-        # Progress 1-3 mapping: In Progress pages
         progress_urls = [p["url"] for p in item.get("in_progress_pages", [])]
         for i in range(1, 4):
             if len(progress_urls) >= i:
@@ -322,7 +317,7 @@ with col2:
 
 if st.session_state.capture_results:
     st.divider()
-    st.info("👀 Reviewing Captured Images. Regions are side-by-side. Order: Summary -> Gallery -> In Progress.")
+    st.info("👀 Reviewing Captured Images.")
     
     n_cols = len(st.session_state.capture_results)
     preview_cols = st.columns(n_cols)
@@ -331,13 +326,12 @@ if st.session_state.capture_results:
         with preview_cols[idx]:
             st.markdown(f"### {item['region']}")
             
-            st.caption("Summary")
+            # Show summary image
             st.image(item["local_file"], use_container_width=True)
             
-            for i, page in enumerate(item.get("completed_gallery_pages", [])):
-                st.caption(f"Completed Gallery P{i+1}")
+            # Show gallery images without captions
+            for page in item.get("completed_gallery_pages", []):
                 st.image(page["local"], use_container_width=True)
 
-            for i, page in enumerate(item.get("in_progress_pages", [])):
-                st.caption(f"In Progress P{i+1}")
+            for page in item.get("in_progress_pages", []):
                 st.image(page["local"], use_container_width=True)
