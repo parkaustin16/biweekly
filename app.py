@@ -98,55 +98,22 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # 3. Dynamic Height & Width Calculation for Summary
-                # We target the main content container to match the width logic used in galleries
-                summary_layout_js = """
-                () => {
-                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
-                    const targetHeader = headers.find(h => 
-                        h.innerText && h.innerText.trim().toLowerCase() === 'master banner usage breakdown'
-                    );
-                    
-                    // Fallback area if header not found
-                    if (!targetHeader) return { x: 0, y: 0, width: 1100, height: 2200 };
-
-                    let container = targetHeader.closest('[role="region"]') || targetHeader.closest('.interfaceControl') || targetHeader.parentElement;
-                    
-                    // Find the outermost layout container to get a consistent width
-                    const outerContainer = document.querySelector('.sharedInterfacePage, .interfaceContent, [role="main"]') || container;
-                    const rect = outerContainer.getBoundingClientRect();
-
-                    const boxes = Array.from(container.querySelectorAll('.summaryCard, [class*="record"], [class*="Cell"], [role="button"], [class*="grid"], [class*="chart"]'));
-                    let bottomY = targetHeader.getBoundingClientRect().bottom + window.scrollY + 500;
-                    
-                    if (boxes.length > 0) {
-                        const bottoms = boxes.map(b => b.getBoundingClientRect().bottom + window.scrollY);
-                        bottomY = Math.max(...bottoms) + 80;
-                    }
-
-                    return {
-                        x: Math.floor(rect.left) || 0,
-                        y: 0,
-                        width: Math.floor(rect.width) || 1100,
-                        height: Math.min(int(bottomY), 3400)
-                    };
-                }
-                """
-                # Simplified dynamic height for summary capture using same width logic as galleries
+                # 3. Dynamic Height & Width Calculation for Summary (TIGHTENED)
                 calculated_layout = page.evaluate("""
                 () => {
-                    // We look for the main content area to determine the 'standard' width of the interface
                     const mainContent = document.querySelector('.interfaceContent') || document.body;
                     const rect = mainContent.getBoundingClientRect();
                     
-                    // Logic to find bottom of summary section
-                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4'));
-                    const target = headers.find(h => h.innerText.toLowerCase().includes('breakdown')) || headers[0];
+                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
+                    const target = headers.find(h => h.innerText && h.innerText.toLowerCase().includes('master banner usage breakdown'));
+                    
                     let bottom = 2200;
                     if(target) {
+                        // Find the specific container holding the breakdown data
                         const container = target.closest('.width-full') || target.parentElement;
                         const bounds = container.getBoundingClientRect();
-                        bottom = bounds.bottom + window.scrollY + 200;
+                        // Reduced padding from +200 to +20 to remove whitespace
+                        bottom = bounds.bottom + window.scrollY + 20;
                     }
 
                     return {
@@ -158,7 +125,7 @@ def capture_regional_images(target_url):
                 }
                 """)
 
-                # 4. Main Summary Capture (Using dynamic layout to match gallery width)
+                # 4. Main Summary Capture
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
                 page.screenshot(
@@ -283,6 +250,7 @@ def sync_to_airtable(data_list):
         base_type = item.get("header_id", "Consolidated Report")
         record_type = f"{base_type} | {item['region']}"
         
+        # Combined attachments for the main field
         record_attachments = [{"url": item["url"]}]
         for page in item.get("completed_gallery_pages", []):
             record_attachments.append({"url": page["url"]})
@@ -296,12 +264,17 @@ def sync_to_airtable(data_list):
             "Cloud ID": item["url"]
         }
         
-        all_gal_urls = [p["url"] for p in item.get("completed_gallery_pages", [])] + \
-                       [p["url"] for p in item.get("in_progress_pages", [])]
-
+        # Gallery 1-3 prioritization: Completed Gallery pages first
+        completed_urls = [p["url"] for p in item.get("completed_gallery_pages", [])]
         for i in range(1, 4):
-            if len(all_gal_urls) >= i:
-                fields[f"Gallery {i}"] = all_gal_urls[i-1]
+            if len(completed_urls) >= i:
+                fields[f"Gallery {i}"] = completed_urls[i-1]
+
+        # Progress 1-3 mapping: In Progress pages
+        progress_urls = [p["url"] for p in item.get("in_progress_pages", [])]
+        for i in range(1, 4):
+            if len(progress_urls) >= i:
+                fields[f"Progress {i}"] = progress_urls[i-1]
         
         records_to_create.append({"fields": fields})
 
