@@ -62,7 +62,7 @@ def capture_regional_images(target_url):
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
-                page.wait_for_timeout(3500) 
+                page.wait_for_timeout(4000) # Increased wait for interface to render
 
                 # 2. DYNAMIC SIZING LOGIC (Main Report)
                 clip_height = 2420 
@@ -121,38 +121,38 @@ def capture_regional_images(target_url):
                 if region != "All Regions":
                     gallery_count = 1
                     
-                    # Target the gallery specifically
-                    gallery_header_selector = "div:has-text('Completed Request Gallery')"
-                    
                     while True:
                         status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
                         
                         # Find gallery dimensions and pagination state
                         gallery_js = """
                         () => {
-                            const headers = Array.from(document.querySelectorAll('div, h1, h2, h3'));
-                            const galHeader = headers.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
-                            if (!galHeader) return null;
-                            
-                            const container = galHeader.closest('.interfaceControl') || galHeader.parentElement;
-                            const rect = container.getBoundingClientRect();
-                            
-                            // Specific check for Airtable's next button classes
-                            const nextBtn = container.querySelector('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])');
-                            
-                            // Check if disabled or if we're on the last page of X/Y
-                            let isLastPage = true;
-                            if (nextBtn) {
-                                isLastPage = nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true';
-                            }
+                            const findGallery = () => {
+                                const labels = Array.from(document.querySelectorAll('div, h1, h2, h3'));
+                                const galHeader = labels.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
+                                if (!galHeader) return null;
+                                
+                                // Find the actual gallery container (usually a sibling or a parent's child)
+                                const container = galHeader.closest('.interfaceControl') || galHeader.parentElement;
+                                const rect = container.getBoundingClientRect();
+                                
+                                // Locate the pagination buttons inside this specific container
+                                const nextBtn = container.querySelector('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])');
+                                
+                                let isLastPage = true;
+                                if (nextBtn) {
+                                    isLastPage = nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true';
+                                }
 
-                            return {
-                                x: Math.floor(rect.left),
-                                y: Math.floor(rect.top + window.scrollY),
-                                width: Math.floor(rect.width),
-                                height: Math.floor(rect.height),
-                                isLastPage: isLastPage
+                                return {
+                                    x: Math.floor(rect.left),
+                                    y: Math.floor(rect.top + window.scrollY),
+                                    width: Math.floor(rect.width),
+                                    height: Math.floor(rect.height),
+                                    isLastPage: isLastPage
+                                };
                             };
+                            return findGallery();
                         }
                         """
                         gal_info = page.evaluate(gallery_js)
@@ -160,18 +160,18 @@ def capture_regional_images(target_url):
                         if not gal_info:
                             break
                         
-                        # Scroll the gallery container into view and wiggle to trigger lazy load
+                        # Scroll and trigger lazy load
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(1000)
+                        page.wait_for_timeout(1500)
 
                         # Capture current gallery page
                         gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
                         page.screenshot(
                             path=gal_filename,
                             clip={
-                                'x': gal_info['x'], 
+                                'x': 0, # Usually full width is safer for galleries
                                 'y': gal_info['y'], 
-                                'width': gal_info['width'], 
+                                'width': 800, 
                                 'height': gal_info['height']
                             }
                         )
@@ -190,11 +190,11 @@ def capture_regional_images(target_url):
                         if gal_info['isLastPage']:
                             break
                         
-                        # Click Next and wait for content transition
-                        next_button = page.locator('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])').first
-                        if next_button.is_visible():
-                            next_button.click()
-                            page.wait_for_timeout(2500) # Increased wait for gallery refresh
+                        # Click Next
+                        next_btn_locator = page.locator('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])').first
+                        if next_btn_locator.is_visible():
+                            next_btn_locator.click()
+                            page.wait_for_timeout(3000) # Wait for gallery transition
                             gallery_count += 1
                         else:
                             break
