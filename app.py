@@ -115,17 +115,25 @@ def capture_regional_images(target_url):
                 if calculated_height and calculated_height > 100:
                     clip_height = min(int(calculated_height), 3400) 
                 
-                # Use hyphens instead of underscores for filenames
+                # Optimized Naming & Format: Switched to JPG with 80% quality for smaller files
                 safe_region = region.lower().replace(' ', '-')
-                main_filename = f"{safe_region}-main.png"
-                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': capture_width, 'height': clip_height})
+                main_filename = f"{safe_region}-main.jpg"
+                
+                page.screenshot(
+                    path=main_filename, 
+                    clip={'x': 0, 'y': 0, 'width': capture_width, 'height': clip_height},
+                    type="jpeg",
+                    quality=80
+                )
 
-                # Ensure public_id also uses hyphens instead of underscores
+                # Cloudinary upload with auto-optimization to ensure size is minimized
                 safe_date = capture_date.replace('-', '')
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
                     folder="airtableautomation",
-                    public_id=f"{safe_region}-main-{safe_date}"
+                    public_id=f"{safe_region}-main-{safe_date}",
+                    fetch_format="auto",
+                    quality="auto"
                 )
                 
                 region_entry = {
@@ -176,14 +184,21 @@ def capture_regional_images(target_url):
                             page.mouse.wheel(0, gal_info['y'] - 100)
                             page.wait_for_timeout(1000)
 
-                            # Replace underscores with hyphens
-                            gal_filename = f"{safe_region}-gal-{gallery_count}.png"
-                            page.screenshot(path=gal_filename, clip=gal_info)
+                            # Optimizing Gallery Images as well
+                            gal_filename = f"{safe_region}-gal-{gallery_count}.jpg"
+                            page.screenshot(
+                                path=gal_filename, 
+                                clip=gal_info,
+                                type="jpeg",
+                                quality=80
+                            )
                             
                             gal_upload = cloudinary.uploader.upload(
                                 gal_filename,
                                 folder="airtableautomation",
-                                public_id=f"{safe_region}-gal{gallery_count}-{safe_date}"
+                                public_id=f"{safe_region}-gal{gallery_count}-{safe_date}",
+                                fetch_format="auto",
+                                quality="auto"
                             )
                             
                             region_entry["galleries"].append({
@@ -279,7 +294,7 @@ if 'capture_results' not in st.session_state:
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v9"
+    key="fixed_url_input_v10"
 )
 
 col1, col2 = st.columns([1, 4])
