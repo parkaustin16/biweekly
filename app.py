@@ -36,8 +36,8 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Increased viewport width further to 1600 to provide more breathing room for wide interfaces
-        context = browser.new_context(viewport={'width': 1600, 'height': 3500})
+        # Increased viewport width to 1800 to ensure wide interfaces have room to render fully
+        context = browser.new_context(viewport={'width': 1800, 'height': 3500})
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
@@ -105,8 +105,8 @@ def capture_regional_images(target_url):
                     clip_height = min(int(calculated_height), 3400) 
                 
                 main_filename = f"{region.lower().replace(' ', '')}_main.png"
-                # Increased capture width to 1400 to prevent cutting off the right side
-                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 1400, 'height': clip_height})
+                # Set width to 1550 for the main interface capture to prevent right-side clipping
+                page.screenshot(path=main_filename, clip={'x': 0, 'y': 0, 'width': 1550, 'height': clip_height})
 
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
@@ -127,10 +127,11 @@ def capture_regional_images(target_url):
                 # 3. CONFINED GALLERY CAPTURE LOGIC
                 if region != "All Regions":
                     gallery_count = 1
+                    # Flag to track if we've handled the "stop capturing first page" requirement
+                    page_one_skipped = False
                     
                     while True:
-                        status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
-                        
+                        # Find the gallery container
                         container_js = """
                         () => {
                             let el = document.querySelector('[aria-label="Completed Request Gallery gallery"]');
@@ -154,25 +155,33 @@ def capture_regional_images(target_url):
                         if not gal_info:
                             status_placeholder.write(f"⚠️ **{region}**: Gallery container not found.")
                             break
-                        
-                        # Move viewport to gallery box to ensure visibility
-                        page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(1000)
 
-                        gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
-                        page.screenshot(path=gal_filename, clip=gal_info)
-                        
-                        gal_upload = cloudinary.uploader.upload(
-                            gal_filename,
-                            folder="airtableautomation",
-                            public_id=f"{region.lower().replace(' ', '')}_gal{gallery_count}_{capture_date.replace('-', '')}"
-                        )
-                        
-                        region_entry["galleries"].append({
-                            "local": gal_filename,
-                            "url": gal_upload["secure_url"]
-                        })
+                        # Logic to skip capturing the first page
+                        if not page_one_skipped:
+                            status_placeholder.write(f"⏭️ **{region}**: Skipping first gallery page...")
+                        else:
+                            status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
+                            
+                            # Move viewport to gallery box to ensure visibility
+                            page.mouse.wheel(0, gal_info['y'] - 100)
+                            page.wait_for_timeout(1000)
 
+                            gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
+                            page.screenshot(path=gal_filename, clip=gal_info)
+                            
+                            gal_upload = cloudinary.uploader.upload(
+                                gal_filename,
+                                folder="airtableautomation",
+                                public_id=f"{region.lower().replace(' ', '')}_gal{gallery_count}_{capture_date.replace('-', '')}"
+                            )
+                            
+                            region_entry["galleries"].append({
+                                "local": gal_filename,
+                                "url": gal_upload["secure_url"]
+                            })
+                            gallery_count += 1
+
+                        # Pagination Logic
                         next_btn = page.locator('[aria-label*="Completed Request Gallery"] div[role="button"]:has(path[d*="m4.64.17"])').first
                         
                         is_visible = next_btn.is_visible()
@@ -180,8 +189,8 @@ def capture_regional_images(target_url):
                             is_disabled = next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true' || window.getComputedStyle(el).opacity === '0.5'")
                             if not is_disabled:
                                 next_btn.click()
+                                page_one_skipped = True # We have now moved past the first page
                                 page.wait_for_timeout(4000) 
-                                gallery_count += 1
                             else:
                                 break
                         else:
@@ -247,10 +256,10 @@ st.title("🗺️ Bi-Weekly Report Capture")
 url_input = st.text_input(
     "Airtable Interface URL",
     value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj",
-    key="fixed_url_input_v3"
+    key="fixed_url_input_v4"
 )
 
-if st.button("🚀 Run Capture", key="fixed_run_btn_v3"):
+if st.button("🚀 Run Capture", key="fixed_run_btn_v4"):
     if url_input:
         results = capture_regional_images(url_input)
         if results:
