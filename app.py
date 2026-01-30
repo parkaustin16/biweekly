@@ -62,7 +62,7 @@ def capture_regional_images(target_url):
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
-                page.wait_for_timeout(4000) # Increased wait for interface to render
+                page.wait_for_timeout(4000) 
 
                 # 2. DYNAMIC SIZING LOGIC (Main Report)
                 clip_height = 2420 
@@ -117,33 +117,31 @@ def capture_regional_images(target_url):
                     "galleries": [] 
                 }
 
-                # 3. IMPROVED GALLERY CAPTURE LOGIC (Skip for All Regions)
+                # 3. UPDATED GALLERY CAPTURE LOGIC (Skip for All Regions)
                 if region != "All Regions":
                     gallery_count = 1
                     
                     while True:
                         status_placeholder.write(f"🔄 **{region}**: Gallery Page {gallery_count}...")
                         
-                        # Find gallery dimensions and pagination state
+                        # Find gallery dimensions and pagination state using div[role="button"]
                         gallery_js = """
                         () => {
                             const findGallery = () => {
-                                const labels = Array.from(document.querySelectorAll('div, h1, h2, h3'));
+                                const labels = Array.from(document.querySelectorAll('div, h1, h2, h3, h4'));
                                 const galHeader = labels.find(h => h.innerText && h.innerText.includes('Completed Request Gallery'));
                                 if (!galHeader) return null;
                                 
-                                // Find the actual gallery container (usually a sibling or a parent's child)
                                 const container = galHeader.closest('.interfaceControl') || galHeader.parentElement;
                                 const rect = container.getBoundingClientRect();
                                 
-                                // Locate the pagination buttons inside this specific container
-                                const nextBtn = container.querySelector('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])');
+                                // Specific selector for the Div-based Next button provided by user
+                                const nextBtn = container.querySelector('div[role="button"]:has-text("Next"), div[role="button"] svg path[d*="m4.64.17"]');
                                 
-                                let isLastPage = true;
-                                if (nextBtn) {
-                                    isLastPage = nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true';
-                                }
-
+                                // Detection for 'disabled' state in Airtable divs often involves checking class names (like 'opacity-low')
+                                // or if the button is simply missing from the specific container
+                                let isLastPage = !nextBtn;
+                                
                                 return {
                                     x: Math.floor(rect.left),
                                     y: Math.floor(rect.top + window.scrollY),
@@ -158,18 +156,19 @@ def capture_regional_images(target_url):
                         gal_info = page.evaluate(gallery_js)
                         
                         if not gal_info:
+                            status_placeholder.write(f"⚠️ **{region}**: Gallery section not found.")
                             break
                         
-                        # Scroll and trigger lazy load
+                        # Ensure gallery is loaded
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(1500)
+                        page.wait_for_timeout(2000)
 
                         # Capture current gallery page
                         gal_filename = f"{region.lower().replace(' ', '')}_gal_{gallery_count}.png"
                         page.screenshot(
                             path=gal_filename,
                             clip={
-                                'x': 0, # Usually full width is safer for galleries
+                                'x': 0, 
                                 'y': gal_info['y'], 
                                 'width': 800, 
                                 'height': gal_info['height']
@@ -187,19 +186,20 @@ def capture_regional_images(target_url):
                             "url": gal_upload["secure_url"]
                         })
 
-                        if gal_info['isLastPage']:
-                            break
+                        # Pagination Logic
+                        next_btn_selector = 'div[role="button"]:has-text("Next")'
+                        next_btn = page.locator(next_btn_selector).first
                         
-                        # Click Next
-                        next_btn_locator = page.locator('button[aria-label*="Next"], button:has(svg[data-icon="chevron-right"])').first
-                        if next_btn_locator.is_visible():
-                            next_btn_locator.click()
-                            page.wait_for_timeout(3000) # Wait for gallery transition
+                        # Check visibility and if it looks clickable (not disabled by class/opacity)
+                        if await next_btn.is_visible():
+                            # Record current state to see if it changes after click
+                            next_btn.click()
+                            page.wait_for_timeout(3500) # Wait for gallery transition
                             gallery_count += 1
                         else:
                             break
                             
-                        if gallery_count > 15: break # Safety limit
+                        if gallery_count > 15: break 
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured.")
