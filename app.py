@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
 def install_browser_binaries():
-    """Ensures Chromium binaries are present for Playwright."""
+    """Ensures Chromium binaries are present."""
     try:
         subprocess.run(["playwright", "install", "chromium"], check=True)
     except Exception as e:
@@ -35,20 +35,18 @@ def capture_regional_images(target_url):
     header_title = "Consolidated Report"
 
     with sync_playwright() as p:
+        # Increase device_scale_factor for sharper text (Retina/High-DPI simulation)
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            viewport={'width': 3840, 'height': 5000},
+            viewport={'width': 1920, 'height': 3500},
             device_scale_factor=2 
         )
         page = context.new_page()
         
-        # Increase default timeout to 30 seconds for slow-loading Airtable components
-        page.set_default_timeout(30000)
-        
         st.info("🔗 Connecting to Airtable Interface...")
         page.goto(target_url, wait_until="networkidle")
         
-        # --- CLEANUP ---
+        # --- CLEANUP: REMOVE COOKIES & SPECIFIC UI ELEMENTS ---
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -57,22 +55,16 @@ def capture_regional_images(target_url):
                     '[id*="cookie"]', 
                     '[class*="cookie"]',
                     '.banner-content',
-                    'header.flex.flex-none.items-center.width-full',
-                    '.flex.items-center.py2.px2-and-half.border-bottom'
+                    'header.flex.flex-none.items-center.width-full', // Top Nav Bar
+                    '.flex.items-center.py2.px2-and-half.border-bottom' // Secondary Header Bar
                 ];
                 removeSelectors.forEach(selector => {
                     const elements = document.querySelectorAll(selector);
                     elements.forEach(el => el.remove());
                 });
-                document.body.style.zoom = "1.2"; 
             }
         """)
-        
-        # Explicitly wait for the tab list container to exist before trying to click regions
-        try:
-            page.wait_for_selector('div[role="tablist"]', timeout=15000)
-        except Exception:
-            st.warning("⚠️ Tab container not found, attempting to proceed anyway...")
+        page.wait_for_timeout(500)
 
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
@@ -88,21 +80,18 @@ def capture_regional_images(target_url):
             status_placeholder.write(f"🔄 **{region}**: In Progress...")
             
             try:
-                # Optimized Tab Navigation with longer timeout and scroll-into-view
+                # 1. Navigate to Tab & FORCE DATA REFRESH
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
-                
-                # Check visibility and click
-                tab_selector.wait_for(state="visible", timeout=15000)
-                tab_selector.scroll_into_view_if_needed()
+                tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
-                # Force trigger lazy-loaded charts
-                page.evaluate("window.scrollTo(0, 1000)")
-                page.wait_for_timeout(1500)
+                # Optimized refresh logic
+                page.evaluate("window.scrollTo(0, 800)")
+                page.wait_for_timeout(800)
                 page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(1500)
 
-                # Hide galleries for Summary capture
+                # 2. HIDE GALLERIES FOR SUMMARY CAPTURE
                 page.evaluate("""
                     () => {
                         const hideElements = (labelText) => {
@@ -118,44 +107,55 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # Summary Height Calculation
+                # 3. Dynamic Height & Width Calculation
                 calculated_layout = page.evaluate("""
                 () => {
                     const mainContent = document.querySelector('.interfaceContent') || document.body;
                     const rect = mainContent.getBoundingClientRect();
+                    
                     const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
                     const target = headers.find(h => h.innerText && h.innerText.toLowerCase().includes('master banner usage breakdown'));
                     
-                    let bottom = 3000;
+                    let bottom = 2200;
                     if(target) {
                         const sectionContainer = target.closest('.width-full.rounded-big') || target.closest('[role="region"]') || target.parentElement;
                         const items = Array.from(sectionContainer.querySelectorAll('.chartContainer, .legend, svg, canvas, [role="listitem"], .recordList'));
+                        
                         if (items.length > 0) {
                             const bottoms = items.map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                            bottom = Math.max(...bottoms) + 120; 
+                            bottom = Math.max(...bottoms) + 60; 
                         } else {
-                            bottom = sectionContainer.getBoundingClientRect().bottom + window.scrollY + 50;
+                            bottom = sectionContainer.getBoundingClientRect().bottom + window.scrollY + 20;
                         }
                     }
+
                     return {
                         x: Math.max(0, rect.left),
                         y: 0,
-                        width: rect.width > 1000 ? rect.width : 2200,
+                        width: rect.width > 500 ? rect.width : 1100,
                         height: Math.floor(bottom)
                     };
                 }
                 """)
 
+                # 4. Main Summary Capture - Improved Quality (90)
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
-                page.screenshot(path=main_filename, clip=calculated_layout, type="jpeg", quality=100)
+                
+                page.screenshot(
+                    path=main_filename, 
+                    clip=calculated_layout,
+                    type="jpeg",
+                    quality=90 
+                )
 
+                safe_date = capture_date.replace('-', '')
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
                     folder="airtableautomation",
-                    public_id=f"{safe_region}-main-{datetime.now().strftime('%Y%m%d')}",
+                    public_id=f"{safe_region}-main-{safe_date}",
                     fetch_format="auto",
-                    quality="auto:best"
+                    quality="auto:good" # Changed from eco to good for better fidelity
                 )
                 
                 region_entry = {
@@ -168,6 +168,7 @@ def capture_regional_images(target_url):
                     "completed_gallery_pages": [] 
                 }
 
+                # Helper to capture paged galleries
                 def capture_paged_gallery(gallery_label, storage_key):
                     page.evaluate(f"""
                         () => {{
@@ -199,18 +200,23 @@ def capture_regional_images(target_url):
                         if not gal_info: break
                         
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(1000)
+                        page.wait_for_timeout(500)
 
                         safe_label = gallery_label.lower().replace(' ', '-')
                         gal_filename = f"{safe_region}-{safe_label}-{page_idx}.jpg"
-                        page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=100)
+                        page.screenshot(
+                            path=gal_filename, 
+                            clip=gal_info,
+                            type="jpeg",
+                            quality=80 # Increased gallery quality
+                        )
                         
                         gal_upload = cloudinary.uploader.upload(
                             gal_filename,
                             folder="airtableautomation",
-                            public_id=f"{safe_region}-{safe_label}{page_idx}-{datetime.now().strftime('%Y%m%d')}",
+                            public_id=f"{safe_region}-{safe_label}{page_idx}-{safe_date}",
                             fetch_format="auto",
-                            quality="auto:best"
+                            quality="auto:good"
                         )
 
                         region_entry[storage_key].append({
@@ -224,11 +230,12 @@ def capture_regional_images(target_url):
                             if not is_disabled:
                                 next_btn.click()
                                 page_idx += 1
-                                page.wait_for_timeout(2000) # Increased gallery page wait
+                                page.wait_for_timeout(1000)
                             else: break
                         else: break
                         if page_idx > 5: break
 
+                # 5. Capture Galleries
                 if region != "All Regions":
                     capture_paged_gallery("Completed Request Gallery", "completed_gallery_pages")
                     capture_paged_gallery("In Progress", "in_progress_pages")
@@ -248,18 +255,22 @@ def sync_to_airtable(data_list):
         "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
         "Content-Type": "application/json"
     }
+    
     if not data_list: return None
+
     records_to_create = []
     for item in data_list:
         base_type = item.get("header_id", "Consolidated Report")
+        record_type = f"{base_type} | {item['region']}"
+        
         record_attachments = [{"url": item["url"]}]
-        for pg in item.get("completed_gallery_pages", []):
-            record_attachments.append({"url": pg["url"]})
-        for pg in item.get("in_progress_pages", []):
-            record_attachments.append({"url": pg["url"]})
+        for page in item.get("completed_gallery_pages", []):
+            record_attachments.append({"url": page["url"]})
+        for page in item.get("in_progress_pages", []):
+            record_attachments.append({"url": page["url"]})
             
         fields = {
-            "Type": f"{base_type} | {item['region']}",
+            "Type": record_type,
             "Date": item["date"],
             "Attachments": record_attachments,
             "Cloud ID": item["url"]
@@ -277,15 +288,18 @@ def sync_to_airtable(data_list):
         
         records_to_create.append({"fields": fields})
 
-    response = requests.post(url, headers=headers, json={"records": records_to_create})
+    payload = {"records": records_to_create}
+    response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        st.success(f"🎉 Created {len(records_to_create)} records!")
+        st.success(f"🎉 Successfully created {len(records_to_create)} individual regional records!")
         st.session_state.capture_results = None
     else:
         st.error(f"❌ Sync Error: {response.text}")
 
+# --- 4. USER INTERFACE ---
+
 st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
-st.title("🗺️ Bi-Weekly Report Capture (High Res)")
+st.title("🗺️ Bi-Weekly Report Capture")
 
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
@@ -306,13 +320,21 @@ with col2:
 
 if st.session_state.capture_results:
     st.divider()
+    st.info("👀 Reviewing Captured Images.")
+    
     n_cols = len(st.session_state.capture_results)
     preview_cols = st.columns(n_cols)
+    
     for idx, item in enumerate(st.session_state.capture_results):
         with preview_cols[idx]:
             st.markdown(f"### {item['region']}")
+            
+            # Show summary image
             st.image(item["local_file"], use_container_width=True)
-            for pg in item.get("completed_gallery_pages", []):
-                st.image(pg["local"], use_container_width=True)
-            for pg in item.get("in_progress_pages", []):
-                st.image(pg["local"], use_container_width=True)
+            
+            # Show gallery images without captions
+            for page in item.get("completed_gallery_pages", []):
+                st.image(page["local"], use_container_width=True)
+
+            for page in item.get("in_progress_pages", []):
+                st.image(page["local"], use_container_width=True)
