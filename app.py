@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
 def install_browser_binaries():
-    """Ensures Chromium binaries are present."""
+    """Ensures Chromium binaries are present for Playwright."""
     try:
         subprocess.run(["playwright", "install", "chromium"], check=True)
     except Exception as e:
@@ -19,6 +19,7 @@ def install_browser_binaries():
 install_browser_binaries()
 
 # --- 2. CONFIGURATION ---
+# Credentials must be set in Streamlit Secrets
 cloudinary.config(
     cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
     api_key = st.secrets["CLOUDINARY_API_KEY"],
@@ -36,8 +37,7 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # UPDATED: Increased viewport width to 3840px (double the previous 1920px)
-        # We maintain device_scale_factor=2 for high-density rendering
+        # 3840px width provides a 2x resolution boost over standard 1920px
         context = browser.new_context(
             viewport={'width': 3840, 'height': 5000},
             device_scale_factor=2 
@@ -47,7 +47,7 @@ def capture_regional_images(target_url):
         st.info("🔗 Connecting to Airtable Interface...")
         page.goto(target_url, wait_until="networkidle")
         
-        # --- CLEANUP ---
+        # --- CLEANUP: REMOVE OVERLAYS & OPTIMIZE ZOOM ---
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -63,7 +63,6 @@ def capture_regional_images(target_url):
                     const elements = document.querySelectorAll(selector);
                     elements.forEach(el => el.remove());
                 });
-                // Force a larger zoom if needed to fill the space
                 document.body.style.zoom = "1.2"; 
             }
         """)
@@ -83,16 +82,18 @@ def capture_regional_images(target_url):
             status_placeholder.write(f"🔄 **{region}**: In Progress...")
             
             try:
+                # 1. Tab Navigation
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
+                # Force trigger lazy-loaded charts
                 page.evaluate("window.scrollTo(0, 1000)")
                 page.wait_for_timeout(1000)
                 page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(2000)
 
-                # Hide galleries for main summary
+                # Hide galleries to get a clean Summary view
                 page.evaluate("""
                     () => {
                         const hideElements = (labelText) => {
@@ -108,7 +109,7 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                # UPDATED: Layout calculation optimized for 2x size
+                # 2. Dynamic Summary Height Calculation
                 calculated_layout = page.evaluate("""
                 () => {
                     const mainContent = document.querySelector('.interfaceContent') || document.body;
@@ -133,29 +134,25 @@ def capture_regional_images(target_url):
                     return {
                         x: Math.max(0, rect.left),
                         y: 0,
-                        width: rect.width > 1000 ? rect.width : 2200, // Doubled fallback width
+                        width: rect.width > 1000 ? rect.width : 2200,
                         height: Math.floor(bottom)
                     };
                 }
                 """)
 
+                # 3. Capture Summary
                 safe_region = region.lower().replace(' ', '-')
                 main_filename = f"{safe_region}-main.jpg"
-                
-                page.screenshot(
-                    path=main_filename, 
-                    clip=calculated_layout,
-                    type="jpeg",
-                    quality=100 # Set to max quality
-                )
+                page.screenshot(path=main_filename, clip=calculated_layout, type="jpeg", quality=100)
 
+                # 4. Upload to Cloudinary
                 safe_date = capture_date.replace('-', '')
                 upload_res = cloudinary.uploader.upload(
                     main_filename, 
                     folder="airtableautomation",
                     public_id=f"{safe_region}-main-{safe_date}",
                     fetch_format="auto",
-                    quality="auto:best" # Changed from good to best
+                    quality="auto:best"
                 )
                 
                 region_entry = {
@@ -168,6 +165,7 @@ def capture_regional_images(target_url):
                     "completed_gallery_pages": [] 
                 }
 
+                # 5. Gallery Pagination Handler
                 def capture_paged_gallery(gallery_label, storage_key):
                     page.evaluate(f"""
                         () => {{
@@ -176,7 +174,7 @@ def capture_regional_images(target_url):
                                 el.style.display = 'block';
                                 const container = el.closest('.width-full.rounded-big');
                                 if (container) container.style.display = 'block';
-                            }
+                            }}
                         }}
                     """)
                     
@@ -203,12 +201,7 @@ def capture_regional_images(target_url):
 
                         safe_label = gallery_label.lower().replace(' ', '-')
                         gal_filename = f"{safe_region}-{safe_label}-{page_idx}.jpg"
-                        page.screenshot(
-                            path=gal_filename, 
-                            clip=gal_info,
-                            type="jpeg",
-                            quality=100 # Max gallery quality
-                        )
+                        page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=100)
                         
                         gal_upload = cloudinary.uploader.upload(
                             gal_filename,
@@ -247,4 +240,92 @@ def capture_regional_images(target_url):
         browser.close()
     return captured_data
 
-# ... rest of the sync_to_airtable and UI logic remains the same ...
+def sync_to_airtable(data_list):
+    """Pushes the captured URLs back to Airtable records."""
+    url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
+    headers = {
+        "Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}",
+        "Content-Type": "application/json"
+    }
+    
+    if not data_list: return None
+
+    records_to_create = []
+    for item in data_list:
+        base_type = item.get("header_id", "Consolidated Report")
+        record_type = f"{base_type} | {item['region']}"
+        
+        # Consolidate all images into one Airtable Attachment field
+        record_attachments = [{"url": item["url"]}]
+        for pg in item.get("completed_gallery_pages", []):
+            record_attachments.append({"url": pg["url"]})
+        for pg in item.get("in_progress_pages", []):
+            record_attachments.append({"url": pg["url"]})
+            
+        fields = {
+            "Type": record_type,
+            "Date": item["date"],
+            "Attachments": record_attachments,
+            "Cloud ID": item["url"]
+        }
+        
+        # Populate individual URL fields for specific gallery tracking
+        completed_urls = [p["url"] for p in item.get("completed_gallery_pages", [])]
+        for i in range(1, 4):
+            if len(completed_urls) >= i:
+                fields[f"Gallery {i}"] = completed_urls[i-1]
+
+        progress_urls = [p["url"] for p in item.get("in_progress_pages", [])]
+        for i in range(1, 4):
+            if len(progress_urls) >= i:
+                fields[f"Progress {i}"] = progress_urls[i-1]
+        
+        records_to_create.append({"fields": fields})
+
+    payload = {"records": records_to_create}
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        st.success(f"🎉 Created {len(records_to_create)} individual regional records!")
+        st.session_state.capture_results = None
+    else:
+        st.error(f"❌ Sync Error: {response.text}")
+
+# --- 4. USER INTERFACE ---
+
+st.set_page_config(page_title="Airtable Bi-Weekly Report Capture", layout="wide")
+st.title("🗺️ Bi-Weekly Report Capture (High Res)")
+
+if 'capture_results' not in st.session_state:
+    st.session_state.capture_results = None
+
+url_input = st.text_input("Airtable Interface URL", value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj")
+
+col1, col2 = st.columns([1, 4])
+with col1:
+    if st.button("🚀 Run Capture"):
+        if url_input:
+            results = capture_regional_images(url_input)
+            st.session_state.capture_results = results
+
+with col2:
+    if st.session_state.capture_results:
+        if st.button("📤 Upload to Airtable", type="primary"):
+            sync_to_airtable(st.session_state.capture_results)
+
+if st.session_state.capture_results:
+    st.divider()
+    st.info("👀 Reviewing Captured High-Res Images.")
+    
+    n_cols = len(st.session_state.capture_results)
+    preview_cols = st.columns(n_cols)
+    
+    for idx, item in enumerate(st.session_state.capture_results):
+        with preview_cols[idx]:
+            st.markdown(f"### {item['region']}")
+            st.image(item["local_file"], use_container_width=True, caption="Summary View")
+            
+            for pg in item.get("completed_gallery_pages", []):
+                st.image(pg["local"], use_container_width=True)
+
+            for pg in item.get("in_progress_pages", []):
+                st.image(pg["local"], use_container_width=True)
