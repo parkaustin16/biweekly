@@ -38,7 +38,7 @@ def capture_regional_images(target_url):
         # Increase device_scale_factor for sharper text (Retina/High-DPI simulation)
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            viewport={'width': 1920, 'height': 3500},
+            viewport={'width': 960, 'height': 3500},
             device_scale_factor=2 
         )
         page = context.new_page()
