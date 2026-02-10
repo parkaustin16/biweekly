@@ -93,12 +93,11 @@ def capture_regional_images(target_url):
                 layout_info = page.evaluate("""
                     () => {
                         const tabList = document.querySelector('[role="tablist"]');
-                        const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.parentElement?.parentElement;
+                        // Element 1: Big Number Grid (The metrics like In Progress Ticket Count)
+                        const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.closest('[data-testid="gridRowSection"]');
                         
-                        // FIX: Use native JS to find the header instead of invalid :has-text() selector
-                        const allHeaders = Array.from(document.querySelectorAll('h2'));
-                        const targetHeader = allHeaders.find(h => h.textContent.includes("Master Banner Usage Breakdown"));
-                        const chartsSection = targetHeader ? targetHeader.closest('.width-full.rounded-big') : document.body;
+                        // Element 2: Charts Section (The section starting with Country Distribution)
+                        const chartsSection = document.querySelector('[data-testid="page-element:chart"]')?.closest('[data-testid="gridRowSection"]');
 
                         const getRect = (el) => {
                             if (!el) return null;
@@ -108,35 +107,41 @@ def capture_regional_images(target_url):
 
                         const tabRect = getRect(tabList);
                         const metricsRect = getRect(metricsGrid);
+                        const chartsRect = getRect(chartsSection);
 
-                        // Capture 1: Header + Tabs
+                        // Capture 1: Title + Tabs + Metrics Grid
+                        // We find the bottom of the metrics grid to define the end of screenshot 1
+                        const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
+
                         const headerClip = {
                             x: 0,
                             y: 0,
                             width: 1920,
-                            height: tabRect ? Math.floor(tabRect.y + tabRect.height + 20) : 150
+                            height: Math.floor(metricsBottom)
                         };
 
-                        // Capture 2: Metrics & Charts
-                        let metricsBottom = 2000;
-                        if (metricsRect) {
-                            // Find elements within the charts section specifically
-                            const section = targetHeader ? chartsSection : document;
-                            const charts = section.querySelectorAll('.chartContainer, svg, canvas, .recordList');
+                        // Capture 2: Charts Area
+                        // We start from where the chartsSection begins
+                        let contentClip = null;
+                        if (chartsRect) {
+                            // Scan for all charts to find the true bottom of this section
+                            const charts = chartsSection.querySelectorAll('[data-testid="page-element:chart"]');
+                            let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                metricsBottom = Math.max(...bottoms) + 60;
-                            } else if (metricsRect) {
-                                metricsBottom = metricsRect.y + metricsRect.height + 500;
+                                maxBottom = Math.max(...bottoms) + 40;
                             }
-                        }
 
-                        const contentClip = {
-                            x: metricsRect ? Math.floor(metricsRect.x - 20) : 0,
-                            y: metricsRect ? Math.floor(metricsRect.y - 20) : 160,
-                            width: metricsRect ? Math.floor(metricsRect.width + 40) : 1200,
-                            height: metricsRect ? Math.floor(metricsBottom - metricsRect.y + 20) : 1800
-                        };
+                            contentClip = {
+                                x: 0,
+                                y: Math.floor(chartsRect.y - 10),
+                                width: 1920,
+                                height: Math.floor(maxBottom - chartsRect.y + 20)
+                            };
+                        } else {
+                            // Fallback if charts section isn't found
+                            contentClip = { x: 0, y: 600, width: 1920, height: 1000 };
+                        }
 
                         return { headerClip, contentClip };
                     }
@@ -145,13 +150,13 @@ def capture_regional_images(target_url):
                 safe_region = region.lower().replace(' ', '-')
                 safe_date = capture_date.replace('-', '')
 
-                # --- PART 1: HEADER & TABS ---
+                # --- PART 1: HEADER & METRICS ---
                 header_filename = f"{safe_region}-header.jpg"
                 page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=95)
                 header_upload = cloudinary.uploader.upload(header_filename, folder="airtableautomation", 
                                                          public_id=f"{safe_region}-header-{safe_date}")
 
-                # --- PART 2: METRICS & CHARTS ---
+                # --- PART 2: CHARTS & DISTRIBUTIONS ---
                 content_filename = f"{safe_region}-content.jpg"
                 page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=90)
                 content_upload = cloudinary.uploader.upload(content_filename, folder="airtableautomation", 
@@ -286,10 +291,10 @@ if st.session_state.capture_results:
         with st.expander(f"Region: {item['region']}", expanded=True):
             c1, c2 = st.columns(2)
             with c1:
-                st.caption("Header & Tabs")
+                st.caption("Capture 1: Header & Metrics")
                 st.image(item["local_header"])
             with c2:
-                st.caption("Metrics & Charts")
+                st.caption("Capture 2: Charts & Details")
                 st.image(item["local_content"])
             
             all_gal = item.get("completed_gallery_pages", []) + item.get("in_progress_pages", [])
