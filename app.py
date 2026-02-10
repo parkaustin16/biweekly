@@ -252,7 +252,7 @@ def sync_to_airtable(data_list):
         chunk = records_to_create[i:i+10]
         response = requests.post(url, headers=headers, json={"records": chunk})
         if response.status_code == 200:
-            st.success(f"🎉 Created records {i+1} to {min(i+10, len(records_to_create))}")
+            st.success(f"🎉 Created records")
         else:
             st.error(f"❌ Sync Error: {response.text}")
     
