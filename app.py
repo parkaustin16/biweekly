@@ -289,8 +289,9 @@ st.markdown("""
     }
     .preview-container img {
         width: 100%;
-        margin-bottom: -4px; 
+        margin-bottom: 8px; /* Added small pad between images */
         display: block;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1); /* Subtle depth for overlapping check */
     }
     </style>
 """, unsafe_allow_html=True)
