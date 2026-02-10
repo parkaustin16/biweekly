@@ -54,7 +54,9 @@ def capture_regional_images(target_url):
                     '[id*="cookie"]', 
                     '[class*="cookie"]',
                     'header.flex.flex-none.items-center.width-full',
-                    '.flex.items-center.py2.px2-and-half.border-bottom'
+                    '.flex.items-center.py2.px2-and-half.border-bottom',
+                    '[data-testid="interface-header"]',
+                    '.interfaceHeader'
                 ];
                 removeSelectors.forEach(selector => {
                     const elements = document.querySelectorAll(selector);
@@ -106,7 +108,8 @@ def capture_regional_images(target_url):
                         const metricsRect = getRect(metricsGrid);
                         const chartsRect = getRect(chartsSection);
 
-                        // START EXACTLY AT TITLE Y
+                        // START EXACTLY AT TITLE Y WITHOUT PADDING
+                        // This prevents the interface nav from being included in the capture
                         const startY = titleRect ? titleRect.y : 0;
                         const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
                         
@@ -308,7 +311,6 @@ if st.session_state.capture_results:
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
             st.subheader(item['region'])
-            # We use a unique container per column to avoid empty div renders
             st.markdown(f'<div class="preview-container" id="container-{idx}">', unsafe_allow_html=True)
             
             st.image(item["local_header"], use_container_width=True)
