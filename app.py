@@ -29,8 +29,9 @@ cloudinary.config(
 
 # --- 3. CORE LOGIC ---
 
+@st.cache_data(show_spinner=False)
 def get_base64_image(image_path):
-    """Helper to convert local image to base64 for inline HTML rendering."""
+    """Helper to convert local image to base64 for inline HTML rendering with caching."""
     if not os.path.exists(image_path):
         return ""
     with open(image_path, "rb") as img_file:
@@ -51,7 +52,9 @@ def capture_regional_images(target_url):
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
-        page.goto(target_url, wait_until="networkidle")
+        # Use 'domcontentloaded' instead of 'networkidle' for faster initial load
+        page.goto(target_url, wait_until="domcontentloaded")
+        page.wait_for_selector('div[role="tab"]', timeout=15000)
         
         # --- CLEANUP UI ELEMENTS ---
         page.evaluate("""
@@ -72,14 +75,12 @@ def capture_regional_images(target_url):
                 });
             }
         """)
-        page.wait_for_timeout(1000)
 
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
-            header_locator.wait_for(state="visible", timeout=10000)
-            raw_header = header_locator.inner_text()
-            header_title = raw_header.split("|")[0].strip() if "|" in raw_header else raw_header.strip()
+            header_title_raw = header_locator.inner_text(timeout=5000)
+            header_title = header_title_raw.split("|")[0].strip() if "|" in header_title_raw else header_title_raw.strip()
         except Exception:
             pass 
 
@@ -88,16 +89,12 @@ def capture_regional_images(target_url):
             status_placeholder.write(f"🔄 **{region}**: In Progress...")
             
             try:
-                # 1. Navigate to Tab
+                # 1. Faster Navigation
                 tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
-                tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
-                # Refresh page state
-                page.evaluate("window.scrollTo(0, 1000)")
-                page.wait_for_timeout(1000)
-                page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(1500)
+                # Reduced wait times - enough for React to render but faster than before
+                page.wait_for_timeout(800) 
 
                 # 2. Logic for Header and Charts
                 layout_info = page.evaluate("""
@@ -154,13 +151,13 @@ def capture_regional_images(target_url):
 
                 # --- PART 1: HEADER & METRICS ---
                 header_filename = f"{safe_region}-header.jpg"
-                page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=95)
+                page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=90)
                 header_upload = cloudinary.uploader.upload(header_filename, folder="airtableautomation", 
                                                          public_id=f"{safe_region}-header-{safe_date}")
 
                 # --- PART 2: CHARTS & DISTRIBUTIONS ---
                 content_filename = f"{safe_region}-content.jpg"
-                page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=90)
+                page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
                 content_upload = cloudinary.uploader.upload(content_filename, folder="airtableautomation", 
                                                           public_id=f"{safe_region}-content-{safe_date}")
 
@@ -177,6 +174,7 @@ def capture_regional_images(target_url):
                 }
 
                 def capture_paged_gallery(gallery_label, storage_key):
+                    # Force visibility immediately
                     page.evaluate(f"document.querySelector('[aria-label*=\"{gallery_label}\"]')?.style.setProperty('display', 'block', 'important')")
                     
                     page_idx = 1
@@ -196,11 +194,12 @@ def capture_regional_images(target_url):
                         """)
                         if not gal_info: break
                         
+                        # Faster scrolling
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(800)
+                        page.wait_for_timeout(400) 
 
                         gal_filename = f"{safe_region}-{gallery_label.lower().replace(' ', '-')}-{page_idx}.jpg"
-                        page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
+                        page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=80)
                         
                         gal_upload = cloudinary.uploader.upload(gal_filename, folder="airtableautomation", 
                                                               public_id=f"{safe_region}-{gallery_label.lower()}{page_idx}-{safe_date}")
@@ -213,7 +212,7 @@ def capture_regional_images(target_url):
                             if not is_disabled:
                                 next_btn.click()
                                 page_idx += 1
-                                page.wait_for_timeout(1200)
+                                page.wait_for_timeout(600)
                             else: break
                         else: break
                         if page_idx > 5: break
@@ -233,7 +232,6 @@ def capture_regional_images(target_url):
 
 def sync_to_airtable(data_list):
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
-    # Changed secret key from AIRTOKEN to AIRTABLE_TOKEN
     headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
     
     if not data_list: return None
@@ -261,13 +259,17 @@ def sync_to_airtable(data_list):
         
         records_to_create.append({"fields": fields})
 
-    payload = {"records": records_to_create}
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        st.success(f"🎉 Successfully created {len(records_to_create)} records!")
-        st.session_state.capture_results = None
-    else:
-        st.error(f"❌ Sync Error: {response.text}")
+    # Chunking records because Airtable API has a 10-record-per-request limit
+    for i in range(0, len(records_to_create), 10):
+        chunk = records_to_create[i:i+10]
+        payload = {"records": chunk}
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            st.success(f"🎉 Created records {i+1} to {min(i+10, len(records_to_create))}")
+        else:
+            st.error(f"❌ Sync Error: {response.text}")
+    
+    st.session_state.capture_results = None
 
 # --- 4. USER INTERFACE ---
 
@@ -321,27 +323,22 @@ if st.session_state.capture_results:
         with cols[idx]:
             st.subheader(item['region'])
             
-            # Build one single HTML block to prevent Streamlit from creating extra "element-container" gaps
-            html_content = f'<div class="preview-container" id="container-{idx}">'
+            # Start HTML construction
+            html_parts = [f'<div class="preview-container" id="container-{idx}">']
             
             # 1. Header
-            b64 = get_base64_image(item["local_header"])
-            html_content += f'<img src="data:image/jpeg;base64,{b64}" />'
+            html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_header"])}" />')
             
             # 2. In Progress
             for g in item.get("in_progress_pages", []):
-                b64 = get_base64_image(g["local"])
-                html_content += f'<img src="data:image/jpeg;base64,{b64}" />'
+                html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
                 
             # 3. Main Content
-            b64 = get_base64_image(item["local_content"])
-            html_content += f'<img src="data:image/jpeg;base64,{b64}" />'
+            html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_content"])}" />')
             
             # 4. Completed
             for g in item.get("completed_gallery_pages", []):
-                b64 = get_base64_image(g["local"])
-                html_content += f'<img src="data:image/jpeg;base64,{b64}" />'
+                html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
                 
-            html_content += '</div>'
-            
-            st.markdown(html_content, unsafe_allow_html=True)
+            html_parts.append('</div>')
+            st.markdown("".join(html_parts), unsafe_allow_html=True)
