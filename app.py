@@ -90,12 +90,15 @@ def capture_regional_images(target_url):
                 page.wait_for_timeout(1500)
 
                 # 2. Logic to Split Captures
-                # We identify the Tabs container and the Big Number Metrics container
                 layout_info = page.evaluate("""
                     () => {
                         const tabList = document.querySelector('[role="tablist"]');
                         const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.parentElement?.parentElement;
-                        const chartsSection = document.querySelector('h2:has-text("Master Banner Usage Breakdown")')?.closest('.width-full.rounded-big') || document.body;
+                        
+                        // FIX: Use native JS to find the header instead of invalid :has-text() selector
+                        const allHeaders = Array.from(document.querySelectorAll('h2'));
+                        const targetHeader = allHeaders.find(h => h.textContent.includes("Master Banner Usage Breakdown"));
+                        const chartsSection = targetHeader ? targetHeader.closest('.width-full.rounded-big') : document.body;
 
                         const getRect = (el) => {
                             if (!el) return null;
@@ -106,7 +109,7 @@ def capture_regional_images(target_url):
                         const tabRect = getRect(tabList);
                         const metricsRect = getRect(metricsGrid);
 
-                        // Capture 1: Header + Tabs (Start from top 0 down to bottom of tabs + 20px)
+                        // Capture 1: Header + Tabs
                         const headerClip = {
                             x: 0,
                             y: 0,
@@ -114,13 +117,17 @@ def capture_regional_images(target_url):
                             height: tabRect ? Math.floor(tabRect.y + tabRect.height + 20) : 150
                         };
 
-                        // Capture 2: Metrics & Charts (Start from top of metrics grid down to chart bottom)
+                        // Capture 2: Metrics & Charts
                         let metricsBottom = 2000;
                         if (metricsRect) {
-                            const charts = document.querySelectorAll('.chartContainer, svg, canvas, .recordList');
+                            // Find elements within the charts section specifically
+                            const section = targetHeader ? chartsSection : document;
+                            const charts = section.querySelectorAll('.chartContainer, svg, canvas, .recordList');
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
                                 metricsBottom = Math.max(...bottoms) + 60;
+                            } else if (metricsRect) {
+                                metricsBottom = metricsRect.y + metricsRect.height + 500;
                             }
                         }
 
@@ -164,7 +171,6 @@ def capture_regional_images(target_url):
 
                 # Helper to capture paged galleries
                 def capture_paged_gallery(gallery_label, storage_key):
-                    # Show the galleries before capturing (they were hidden in your logic)
                     page.evaluate(f"document.querySelector('[aria-label*=\"{gallery_label}\"]')?.style.setProperty('display', 'block', 'important')")
                     
                     page_idx = 1
@@ -225,7 +231,6 @@ def sync_to_airtable(data_list):
     for item in data_list:
         record_type = f"{item.get('header_id', 'Consolidated Report')} | {item['region']}"
         
-        # We attach both the header and content URLs to the Attachments field
         record_attachments = [{"url": item["header_url"]}, {"url": item["content_url"]}]
         for g_page in item.get("completed_gallery_pages", []): record_attachments.append({"url": g_page["url"]})
         for i_page in item.get("in_progress_pages", []): record_attachments.append({"url": i_page["url"]})
@@ -234,10 +239,9 @@ def sync_to_airtable(data_list):
             "Type": record_type,
             "Date": item["date"],
             "Attachments": record_attachments,
-            "Cloud ID": item["content_url"] # Content URL as primary ref
+            "Cloud ID": item["content_url"]
         }
         
-        # Map galleries to individual fields
         for i, p in enumerate(item.get("completed_gallery_pages", []), 1):
             if i <= 3: fields[f"Gallery {i}"] = p["url"]
 
@@ -288,7 +292,6 @@ if st.session_state.capture_results:
                 st.caption("Metrics & Charts")
                 st.image(item["local_content"])
             
-            # Show additional gallery pages
             all_gal = item.get("completed_gallery_pages", []) + item.get("in_progress_pages", [])
             if all_gal:
                 st.caption("Galleries")
