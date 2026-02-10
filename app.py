@@ -89,7 +89,7 @@ def capture_regional_images(target_url):
                 page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(1500)
 
-                # 2. Logic for Header and Charts (Refined to remove interface header capture)
+                # 2. Logic for Header and Charts (Tightened to remove any top chunk)
                 layout_info = page.evaluate("""
                     () => {
                         const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
@@ -106,9 +106,8 @@ def capture_regional_images(target_url):
                         const metricsRect = getRect(metricsGrid);
                         const chartsRect = getRect(chartsSection);
 
-                        // Capture 1: Header + Metrics
-                        // Calculate start point based on the Title element to avoid top nav capture
-                        const startY = titleRect ? Math.max(0, titleRect.y - 10) : 0;
+                        // START EXACTLY AT TITLE Y
+                        const startY = titleRect ? titleRect.y : 0;
                         const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
                         
                         const headerClip = {
@@ -118,7 +117,6 @@ def capture_regional_images(target_url):
                             height: Math.floor(metricsBottom - startY)
                         };
 
-                        // Capture 2: Charts (Cleaned bottom boundary)
                         let contentClip = null;
                         if (chartsRect) {
                             const charts = chartsSection.querySelectorAll('[data-testid="page-element:chart"]');
@@ -169,7 +167,6 @@ def capture_regional_images(target_url):
                     "completed_gallery_pages": [] 
                 }
 
-                # Helper to capture normalized paged galleries
                 def capture_paged_gallery(gallery_label, storage_key):
                     page.evaluate(f"document.querySelector('[aria-label*=\"{gallery_label}\"]')?.style.setProperty('display', 'block', 'important')")
                     
@@ -212,7 +209,6 @@ def capture_regional_images(target_url):
                         else: break
                         if page_idx > 5: break
 
-                # 5. Capture Galleries (Order matching preview requirements)
                 if region != "All Regions":
                     capture_paged_gallery("In Progress", "in_progress_pages")
                     capture_paged_gallery("Completed Request Gallery", "completed_gallery_pages")
@@ -267,7 +263,6 @@ def sync_to_airtable(data_list):
 st.set_page_config(page_title="Airtable Report Capture", layout="wide")
 st.title("🗺️ Bi-Weekly Report Capture")
 
-# Add CSS to make the preview scrollable and compact
 st.markdown("""
     <style>
     .preview-container {
@@ -275,12 +270,12 @@ st.markdown("""
         overflow-y: auto;
         border: 1px solid #ddd;
         border-radius: 8px;
-        padding: 10px;
+        padding: 5px;
         background: #f9f9f9;
         margin-bottom: 20px;
     }
     .preview-container img {
-        margin-bottom: -5px; /* Tighten gap between stacked images */
+        margin-bottom: -5px; 
         display: block;
     }
     </style>
@@ -307,27 +302,22 @@ with col_btn2:
 if st.session_state.capture_results:
     st.divider()
     
-    # Calculate columns based on number of results (usually 5)
     num_results = len(st.session_state.capture_results)
     cols = st.columns(num_results)
     
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
             st.subheader(item['region'])
-            # Wrap all images for this region in a single scrollable container
-            st.markdown('<div class="preview-container">', unsafe_allow_html=True)
+            # We use a unique container per column to avoid empty div renders
+            st.markdown(f'<div class="preview-container" id="container-{idx}">', unsafe_allow_html=True)
             
-            # 1. Header & Metrics
             st.image(item["local_header"], use_container_width=True)
             
-            # 2. In Progress Gallery
             for g in item.get("in_progress_pages", []):
                 st.image(g["local"], use_container_width=True)
             
-            # 3. Charts & Details
             st.image(item["local_content"], use_container_width=True)
             
-            # 4. Completed Gallery
             for g in item.get("completed_gallery_pages", []):
                 st.image(g["local"], use_container_width=True)
                 
