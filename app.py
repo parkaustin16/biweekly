@@ -131,8 +131,8 @@ def capture_regional_images(target_url):
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                // Reduced offset to +32 (was +40) to decrease bottom padding by 8px
-                                maxBottom = Math.max(...bottoms) + 32; 
+                                // Reduced offset to +27 (was +32) to decrease bottom padding by an additional 5px
+                                maxBottom = Math.max(...bottoms) + 27; 
                             }
                             contentClip = {
                                 x: 0, y: Math.floor(chartsRect.y - 10), width: 1920, height: Math.floor(maxBottom - chartsRect.y)
