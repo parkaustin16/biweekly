@@ -4,6 +4,7 @@ import os
 import requests
 import cloudinary
 import cloudinary.uploader
+import base64
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
@@ -27,6 +28,13 @@ cloudinary.config(
 )
 
 # --- 3. CORE LOGIC ---
+
+def get_base64_image(image_path):
+    """Helper to convert local image to base64 for inline HTML rendering."""
+    if not os.path.exists(image_path):
+        return ""
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
 
 def capture_regional_images(target_url):
     regions = ["Asia", "Europe", "LATAM", "Canada", "All Regions"]
@@ -91,7 +99,7 @@ def capture_regional_images(target_url):
                 page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(1500)
 
-                # 2. Logic for Header and Charts (Tightened to remove any top chunk)
+                # 2. Logic for Header and Charts
                 layout_info = page.evaluate("""
                     () => {
                         const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
@@ -108,8 +116,6 @@ def capture_regional_images(target_url):
                         const metricsRect = getRect(metricsGrid);
                         const chartsRect = getRect(chartsSection);
 
-                        // START EXACTLY AT TITLE Y WITHOUT PADDING
-                        // This prevents the interface nav from being included in the capture
                         const startY = titleRect ? titleRect.y : 0;
                         const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
                         
@@ -273,12 +279,13 @@ st.markdown("""
         overflow-y: auto;
         border: 1px solid #ddd;
         border-radius: 8px;
-        padding: 5px;
+        padding: 0px;
         background: #f9f9f9;
         margin-bottom: 20px;
     }
     .preview-container img {
-        margin-bottom: -5px; 
+        width: 100%;
+        margin-bottom: -4px; 
         display: block;
     }
     </style>
@@ -311,16 +318,28 @@ if st.session_state.capture_results:
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
             st.subheader(item['region'])
-            st.markdown(f'<div class="preview-container" id="container-{idx}">', unsafe_allow_html=True)
             
-            st.image(item["local_header"], use_container_width=True)
+            # Build one single HTML block to prevent Streamlit from creating extra "element-container" gaps
+            html_content = f'<div class="preview-container" id="container-{idx}">'
             
+            # 1. Header
+            b64 = get_base64_image(item["local_header"])
+            html_content += f'<img src="data:image/jpeg;base64,{b64}" />'
+            
+            # 2. In Progress
             for g in item.get("in_progress_pages", []):
-                st.image(g["local"], use_container_width=True)
-            
-            st.image(item["local_content"], use_container_width=True)
-            
-            for g in item.get("completed_gallery_pages", []):
-                st.image(g["local"], use_container_width=True)
+                b64 = get_base64_image(g["local"])
+                html_content += f'<img src="data:image/jpeg;base64,{b64}" />'
                 
-            st.markdown('</div>', unsafe_allow_html=True)
+            # 3. Main Content
+            b64 = get_base64_image(item["local_content"])
+            html_content += f'<img src="data:image/jpeg;base64,{b64}" />'
+            
+            # 4. Completed
+            for g in item.get("completed_gallery_pages", []):
+                b64 = get_base64_image(g["local"])
+                html_content += f'<img src="data:image/jpeg;base64,{b64}" />'
+                
+            html_content += '</div>'
+            
+            st.markdown(html_content, unsafe_allow_html=True)
