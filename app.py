@@ -129,7 +129,8 @@ def capture_regional_images(target_url):
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                maxBottom = Math.max(...bottoms) - 8; 
+                                // Increased by 15px (previously -8, now +7 relative to chart bottoms)
+                                maxBottom = Math.max(...bottoms) + 7; 
                             }
 
                             contentClip = {
