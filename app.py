@@ -266,12 +266,13 @@ st.title("🗺️ Bi-Weekly Report Capture")
 st.markdown("""
     <style>
     .preview-container {
-        max-height: 600px;
+        max-height: 700px;
         overflow-y: auto;
         border: 1px solid #ddd;
         border-radius: 8px;
         padding: 10px;
         background: #f9f9f9;
+        margin-bottom: 20px;
     }
     .preview-container img {
         margin-bottom: -5px; /* Tighten gap between stacked images */
@@ -285,24 +286,30 @@ if 'capture_results' not in st.session_state:
 
 url_input = st.text_input("Airtable Interface URL", value="")
 
-col1, col2 = st.columns([1, 4])
-with col1:
+col_btn1, col_btn2 = st.columns([1, 4])
+with col_btn1:
     if st.button("🚀 Run Capture"):
         if url_input:
             results = capture_regional_images(url_input)
             st.session_state.capture_results = results
         else:
             st.warning("Please enter a URL first.")
-with col2:
+with col_btn2:
     if st.session_state.capture_results:
         if st.button("📤 Upload to Airtable", type="primary"):
             sync_to_airtable(st.session_state.capture_results)
 
 if st.session_state.capture_results:
     st.divider()
-    for item in st.session_state.capture_results:
-        with st.expander(f"Region: {item['region']}", expanded=True):
-            # Wrap all images in a single scrollable container
+    
+    # Calculate columns based on number of results (usually 5)
+    num_results = len(st.session_state.capture_results)
+    cols = st.columns(num_results)
+    
+    for idx, item in enumerate(st.session_state.capture_results):
+        with cols[idx]:
+            st.subheader(item['region'])
+            # Wrap all images for this region in a single scrollable container
             st.markdown('<div class="preview-container">', unsafe_allow_html=True)
             
             # 1. Header & Metrics
