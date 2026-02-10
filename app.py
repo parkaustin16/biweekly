@@ -223,7 +223,7 @@ def capture_regional_images(target_url):
 
 def sync_to_airtable(data_list):
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
-    headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {st.secrets['AIRTOKEN']}", "Content-Type": "application/json"}
     
     if not data_list: return None
 
@@ -262,6 +262,24 @@ def sync_to_airtable(data_list):
 st.set_page_config(page_title="Airtable Report Capture", layout="wide")
 st.title("🗺️ Bi-Weekly Report Capture")
 
+# Add CSS to make the preview scrollable and compact
+st.markdown("""
+    <style>
+    .preview-container {
+        max-height: 600px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 10px;
+        background: #f9f9f9;
+    }
+    .preview-container img {
+        margin-bottom: -5px; /* Tighten gap between stacked images */
+        display: block;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
 
@@ -284,6 +302,9 @@ if st.session_state.capture_results:
     st.divider()
     for item in st.session_state.capture_results:
         with st.expander(f"Region: {item['region']}", expanded=True):
+            # Wrap all images in a single scrollable container
+            st.markdown('<div class="preview-container">', unsafe_allow_html=True)
+            
             # 1. Header & Metrics
             st.image(item["local_header"], use_container_width=True)
             
@@ -297,3 +318,5 @@ if st.session_state.capture_results:
             # 4. Completed Gallery
             for g in item.get("completed_gallery_pages", []):
                 st.image(g["local"], use_container_width=True)
+                
+            st.markdown('</div>', unsafe_allow_html=True)
