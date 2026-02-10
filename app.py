@@ -250,7 +250,8 @@ def sync_to_airtable(data_list):
             "Type": record_type,
             "Date": item["date"],
             "Attachments": record_attachments,
-            "Cloud ID": item["content_url"]
+            "Header": item["header_url"],
+            "Charts": item["content_url"]
         }
         
         for i, p in enumerate(item.get("completed_gallery_pages", []), 1):
