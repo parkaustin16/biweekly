@@ -131,8 +131,8 @@ def capture_regional_images(target_url):
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                // Increased offset to +25 for more padding at the bottom of the charts
-                                maxBottom = Math.max(...bottoms) + 25; 
+                                // Increased offset to +40 (was +25) for more padding at the bottom of the charts
+                                maxBottom = Math.max(...bottoms) + 40; 
                             }
                             contentClip = {
                                 x: 0, y: Math.floor(chartsRect.y - 10), width: 1920, height: Math.floor(maxBottom - chartsRect.y)
@@ -149,7 +149,7 @@ def capture_regional_images(target_url):
 
                 # --- PART 1 & 2: SCREENSHOT & PARALLEL UPLOAD ---
                 header_filename = f"{safe_region}-header.jpg"
-                page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=90)
+                page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=85)
                 h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-header-{safe_date}")
 
                 content_filename = f"{safe_region}-content.jpg"
@@ -186,7 +186,7 @@ def capture_regional_images(target_url):
                         page.wait_for_timeout(300) 
 
                         gal_filename = f"{safe_region}-{gallery_label[:3].lower()}-{page_idx}.jpg"
-                        page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=80)
+                        page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
                         
                         g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{gallery_label[:3].lower()}{page_idx}-{safe_date}")
                         region_entry[future_key].append({"local": gal_filename, "future": g_future})
@@ -252,7 +252,7 @@ def sync_to_airtable(data_list):
         chunk = records_to_create[i:i+10]
         response = requests.post(url, headers=headers, json={"records": chunk})
         if response.status_code == 200:
-            st.success(f"🎉 Created records")
+            st.success(f"🎉 Created records {i+1} to {min(i+10, len(records_to_create))}")
         else:
             st.error(f"❌ Sync Error: {response.text}")
     
