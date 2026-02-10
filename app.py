@@ -37,7 +37,7 @@ def capture_regional_images(target_url):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            viewport={'width': 1920, 'height': 4000},
+            viewport={'width': 1920, 'height': 5000},
             device_scale_factor=2 
         )
         page = context.new_page()
@@ -83,20 +83,16 @@ def capture_regional_images(target_url):
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
-                # Force refresh charts/data
-                page.evaluate("window.scrollTo(0, 500)")
-                page.wait_for_timeout(800)
+                # Force refresh
+                page.evaluate("window.scrollTo(0, 1000)")
+                page.wait_for_timeout(1000)
                 page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(1500)
 
-                # 2. Logic to Split Captures
+                # 2. Split Captures Logic
                 layout_info = page.evaluate("""
                     () => {
-                        const tabList = document.querySelector('[role="tablist"]');
-                        // Element 1: Big Number Grid (The metrics like In Progress Ticket Count)
                         const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.closest('[data-testid="gridRowSection"]');
-                        
-                        // Element 2: Charts Section (The section starting with Country Distribution)
                         const chartsSection = document.querySelector('[data-testid="page-element:chart"]')?.closest('[data-testid="gridRowSection"]');
 
                         const getRect = (el) => {
@@ -105,14 +101,11 @@ def capture_regional_images(target_url):
                             return { x: r.left, y: r.top + window.scrollY, width: r.width, height: r.height };
                         };
 
-                        const tabRect = getRect(tabList);
                         const metricsRect = getRect(metricsGrid);
                         const chartsRect = getRect(chartsSection);
 
-                        // Capture 1: Title + Tabs + Metrics Grid
-                        // We find the bottom of the metrics grid to define the end of screenshot 1
+                        // Capture 1: Header + Metrics
                         const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
-
                         const headerClip = {
                             x: 0,
                             y: 0,
@@ -120,27 +113,25 @@ def capture_regional_images(target_url):
                             height: Math.floor(metricsBottom)
                         };
 
-                        // Capture 2: Charts Area
-                        // We start from where the chartsSection begins
+                        // Capture 2: Charts (Reduced bottom to avoid gallery header)
                         let contentClip = null;
                         if (chartsRect) {
-                            // Scan for all charts to find the true bottom of this section
                             const charts = chartsSection.querySelectorAll('[data-testid="page-element:chart"]');
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                maxBottom = Math.max(...bottoms) + 40;
+                                // Reduced buffer to ensure we don't catch the next section's title
+                                maxBottom = Math.max(...bottoms) - 5; 
                             }
 
                             contentClip = {
                                 x: 0,
                                 y: Math.floor(chartsRect.y - 10),
                                 width: 1920,
-                                height: Math.floor(maxBottom - chartsRect.y + 20)
+                                height: Math.floor(maxBottom - chartsRect.y)
                             };
                         } else {
-                            // Fallback if charts section isn't found
-                            contentClip = { x: 0, y: 600, width: 1920, height: 1000 };
+                            contentClip = { x: 0, y: 650, width: 1920, height: 1000 };
                         }
 
                         return { headerClip, contentClip };
@@ -191,7 +182,7 @@ def capture_regional_images(target_url):
                         if not gal_info: break
                         
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(500)
+                        page.wait_for_timeout(700)
 
                         gal_filename = f"{safe_region}-{gallery_label.lower().replace(' ', '-')}-{page_idx}.jpg"
                         page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
@@ -207,15 +198,15 @@ def capture_regional_images(target_url):
                             if not is_disabled:
                                 next_btn.click()
                                 page_idx += 1
-                                page.wait_for_timeout(1000)
+                                page.wait_for_timeout(1200)
                             else: break
                         else: break
                         if page_idx > 5: break
 
-                # 5. Capture Galleries
+                # 5. Capture Galleries (In Progress first to match desired preview order later)
                 if region != "All Regions":
-                    capture_paged_gallery("Completed Request Gallery", "completed_gallery_pages")
                     capture_paged_gallery("In Progress", "in_progress_pages")
+                    capture_paged_gallery("Completed Request Gallery", "completed_gallery_pages")
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured.")
@@ -236,9 +227,10 @@ def sync_to_airtable(data_list):
     for item in data_list:
         record_type = f"{item.get('header_id', 'Consolidated Report')} | {item['region']}"
         
+        # Build attachment list (order: header, content, galleries)
         record_attachments = [{"url": item["header_url"]}, {"url": item["content_url"]}]
-        for g_page in item.get("completed_gallery_pages", []): record_attachments.append({"url": g_page["url"]})
         for i_page in item.get("in_progress_pages", []): record_attachments.append({"url": i_page["url"]})
+        for g_page in item.get("completed_gallery_pages", []): record_attachments.append({"url": g_page["url"]})
             
         fields = {
             "Type": record_type,
@@ -249,7 +241,6 @@ def sync_to_airtable(data_list):
         
         for i, p in enumerate(item.get("completed_gallery_pages", []), 1):
             if i <= 3: fields[f"Gallery {i}"] = p["url"]
-
         for i, p in enumerate(item.get("in_progress_pages", []), 1):
             if i <= 3: fields[f"Progress {i}"] = p["url"]
         
@@ -279,7 +270,6 @@ with col1:
         if url_input:
             results = capture_regional_images(url_input)
             st.session_state.capture_results = results
-
 with col2:
     if st.session_state.capture_results:
         if st.button("📤 Upload to Airtable", type="primary"):
@@ -289,17 +279,26 @@ if st.session_state.capture_results:
     st.divider()
     for item in st.session_state.capture_results:
         with st.expander(f"Region: {item['region']}", expanded=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.caption("Capture 1: Header & Metrics")
-                st.image(item["local_header"])
-            with c2:
-                st.caption("Capture 2: Charts & Details")
-                st.image(item["local_content"])
+            # 1. Header & Metrics
+            st.markdown("### 1. Header & Metrics")
+            st.image(item["local_header"], use_container_width=True)
             
-            all_gal = item.get("completed_gallery_pages", []) + item.get("in_progress_pages", [])
-            if all_gal:
-                st.caption("Galleries")
-                cols = st.columns(len(all_gal))
-                for i, g in enumerate(all_gal):
-                    cols[i].image(g["local"])
+            # 2. In Progress Gallery
+            prog_gal = item.get("in_progress_pages", [])
+            if prog_gal:
+                st.markdown("### 2. In Progress Gallery")
+                cols = st.columns(len(prog_gal))
+                for i, g in enumerate(prog_gal):
+                    cols[i].image(g["local"], caption=f"Page {i+1}")
+            
+            # 3. Charts & Details
+            st.markdown("### 3. Charts & Details")
+            st.image(item["local_content"], use_container_width=True)
+            
+            # 4. Completed Gallery
+            comp_gal = item.get("completed_gallery_pages", [])
+            if comp_gal:
+                st.markdown("### 4. Completed Gallery")
+                cols = st.columns(len(comp_gal))
+                for i, g in enumerate(comp_gal):
+                    cols[i].image(g["local"], caption=f"Page {i+1}")
