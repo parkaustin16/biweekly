@@ -83,13 +83,13 @@ def capture_regional_images(target_url):
                 tab_selector.wait_for(state="visible", timeout=5000)
                 tab_selector.click()
                 
-                # Force refresh
+                # Refresh page state
                 page.evaluate("window.scrollTo(0, 1000)")
                 page.wait_for_timeout(1000)
                 page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(1500)
 
-                # 2. Split Captures Logic
+                # 2. Logic for Header and Charts
                 layout_info = page.evaluate("""
                     () => {
                         const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.closest('[data-testid="gridRowSection"]');
@@ -113,15 +113,14 @@ def capture_regional_images(target_url):
                             height: Math.floor(metricsBottom)
                         };
 
-                        // Capture 2: Charts (Reduced bottom to avoid gallery header)
+                        // Capture 2: Charts (Cleaned bottom boundary)
                         let contentClip = null;
                         if (chartsRect) {
                             const charts = chartsSection.querySelectorAll('[data-testid="page-element:chart"]');
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                // Reduced buffer to ensure we don't catch the next section's title
-                                maxBottom = Math.max(...bottoms) - 5; 
+                                maxBottom = Math.max(...bottoms) - 8; 
                             }
 
                             contentClip = {
@@ -165,7 +164,7 @@ def capture_regional_images(target_url):
                     "completed_gallery_pages": [] 
                 }
 
-                # Helper to capture paged galleries
+                # Helper to capture normalized paged galleries
                 def capture_paged_gallery(gallery_label, storage_key):
                     page.evaluate(f"document.querySelector('[aria-label*=\"{gallery_label}\"]')?.style.setProperty('display', 'block', 'important')")
                     
@@ -176,13 +175,18 @@ def capture_regional_images(target_url):
                                 const el = document.querySelector('[aria-label*="{gallery_label}"]');
                                 if (!el) return null;
                                 const rect = el.getBoundingClientRect();
-                                return {{ x: rect.left, y: rect.top + window.scrollY, width: rect.width, height: rect.height }};
+                                return {{ 
+                                    x: 0, 
+                                    y: rect.top + window.scrollY - 10, 
+                                    width: 1920, 
+                                    height: rect.height + 20 
+                                }};
                             }}
                         """)
                         if not gal_info: break
                         
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(700)
+                        page.wait_for_timeout(800)
 
                         gal_filename = f"{safe_region}-{gallery_label.lower().replace(' ', '-')}-{page_idx}.jpg"
                         page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
@@ -203,7 +207,7 @@ def capture_regional_images(target_url):
                         else: break
                         if page_idx > 5: break
 
-                # 5. Capture Galleries (In Progress first to match desired preview order later)
+                # 5. Capture Galleries (Order matching preview requirements)
                 if region != "All Regions":
                     capture_paged_gallery("In Progress", "in_progress_pages")
                     capture_paged_gallery("Completed Request Gallery", "completed_gallery_pages")
@@ -227,7 +231,6 @@ def sync_to_airtable(data_list):
     for item in data_list:
         record_type = f"{item.get('header_id', 'Consolidated Report')} | {item['region']}"
         
-        # Build attachment list (order: header, content, galleries)
         record_attachments = [{"url": item["header_url"]}, {"url": item["content_url"]}]
         for i_page in item.get("in_progress_pages", []): record_attachments.append({"url": i_page["url"]})
         for g_page in item.get("completed_gallery_pages", []): record_attachments.append({"url": g_page["url"]})
@@ -262,7 +265,7 @@ st.title("🗺️ Bi-Weekly Report Capture")
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
 
-url_input = st.text_input("Airtable Interface URL", value="https://airtable.com/appyOEewUQye37FCb/shr9NiIaM2jisKHiK?tTPqb=sfsTkRwjWXEAjyRGj")
+url_input = st.text_input("Airtable Interface URL", value="")
 
 col1, col2 = st.columns([1, 4])
 with col1:
@@ -270,6 +273,8 @@ with col1:
         if url_input:
             results = capture_regional_images(url_input)
             st.session_state.capture_results = results
+        else:
+            st.warning("Please enter a URL first.")
 with col2:
     if st.session_state.capture_results:
         if st.button("📤 Upload to Airtable", type="primary"):
@@ -280,25 +285,15 @@ if st.session_state.capture_results:
     for item in st.session_state.capture_results:
         with st.expander(f"Region: {item['region']}", expanded=True):
             # 1. Header & Metrics
-            st.markdown("### 1. Header & Metrics")
             st.image(item["local_header"], use_container_width=True)
             
             # 2. In Progress Gallery
-            prog_gal = item.get("in_progress_pages", [])
-            if prog_gal:
-                st.markdown("### 2. In Progress Gallery")
-                cols = st.columns(len(prog_gal))
-                for i, g in enumerate(prog_gal):
-                    cols[i].image(g["local"], caption=f"Page {i+1}")
+            for g in item.get("in_progress_pages", []):
+                st.image(g["local"], use_container_width=True)
             
             # 3. Charts & Details
-            st.markdown("### 3. Charts & Details")
             st.image(item["local_content"], use_container_width=True)
             
             # 4. Completed Gallery
-            comp_gal = item.get("completed_gallery_pages", [])
-            if comp_gal:
-                st.markdown("### 4. Completed Gallery")
-                cols = st.columns(len(comp_gal))
-                for i, g in enumerate(comp_gal):
-                    cols[i].image(g["local"], caption=f"Page {i+1}")
+            for g in item.get("completed_gallery_pages", []):
+                st.image(g["local"], use_container_width=True)
