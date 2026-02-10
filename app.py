@@ -7,6 +7,7 @@ import cloudinary.uploader
 import base64
 from datetime import datetime
 from playwright.sync_api import sync_playwright
+from concurrent.futures import ThreadPoolExecutor
 
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
@@ -27,6 +28,9 @@ cloudinary.config(
     secure = True
 )
 
+# Global executor for background uploads to speed up the loop
+upload_executor = ThreadPoolExecutor(max_workers=5)
+
 # --- 3. CORE LOGIC ---
 
 @st.cache_data(show_spinner=False)
@@ -37,11 +41,16 @@ def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
 
+def background_upload(file_path, public_id):
+    """Uploads to Cloudinary in a background thread."""
+    return cloudinary.uploader.upload(file_path, folder="airtableautomation", public_id=public_id)
+
 def capture_regional_images(target_url):
     regions = ["Asia", "Europe", "LATAM", "Canada", "All Regions"]
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
     header_title = "Consolidated Report"
+    upload_futures = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -52,26 +61,21 @@ def capture_regional_images(target_url):
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
-        # Use 'domcontentloaded' instead of 'networkidle' for faster initial load
-        page.goto(target_url, wait_until="domcontentloaded")
+        page.goto(target_url, wait_until="commit") # Faster initial load
         page.wait_for_selector('div[role="tab"]', timeout=15000)
         
         # --- CLEANUP UI ELEMENTS ---
         page.evaluate("""
             () => {
                 const removeSelectors = [
-                    '#onetrust-banner-sdk', 
-                    '.onetrust-pc-dark-filter',
-                    '[id*="cookie"]', 
-                    '[class*="cookie"]',
+                    '#onetrust-banner-sdk', '.onetrust-pc-dark-filter',
+                    '[id*="cookie"]', '[class*="cookie"]',
                     'header.flex.flex-none.items-center.width-full',
                     '.flex.items-center.py2.px2-and-half.border-bottom',
-                    '[data-testid="interface-header"]',
-                    '.interfaceHeader'
+                    '[data-testid="interface-header"]', '.interfaceHeader'
                 ];
                 removeSelectors.forEach(selector => {
-                    const elements = document.querySelectorAll(selector);
-                    elements.forEach(el => el.remove());
+                    document.querySelectorAll(selector).forEach(el => el.remove());
                 });
             }
         """)
@@ -79,24 +83,25 @@ def capture_regional_images(target_url):
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
-            header_title_raw = header_locator.inner_text(timeout=5000)
+            header_title_raw = header_locator.inner_text(timeout=3000)
             header_title = header_title_raw.split("|")[0].strip() if "|" in header_title_raw else header_title_raw.strip()
         except Exception:
             pass 
 
         for region in regions:
             status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 **{region}**: In Progress...")
+            status_placeholder.write(f"🔄 **{region}**: Capturing...")
             
             try:
-                # 1. Faster Navigation
-                tab_selector = page.locator(f'div[role="tab"]:has-text("{region}")')
-                tab_selector.click()
+                # 1. Optimized Navigation
+                tab = page.locator(f'div[role="tab"]:has-text("{region}")')
+                tab.click()
                 
-                # Reduced wait times - enough for React to render but faster than before
-                page.wait_for_timeout(800) 
+                # Wait for content to actually change instead of a fixed timeout
+                page.wait_for_function("() => document.querySelector('.loading-spinner') === null")
+                page.wait_for_timeout(400) # Tiny buffer for React paint
 
-                # 2. Logic for Header and Charts
+                # 2. Optimized Rect Calculation
                 layout_info = page.evaluate("""
                     () => {
                         const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
@@ -117,10 +122,7 @@ def capture_regional_images(target_url):
                         const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
                         
                         const headerClip = {
-                            x: 0,
-                            y: Math.floor(startY),
-                            width: 1920,
-                            height: Math.floor(metricsBottom - startY)
+                            x: 0, y: Math.floor(startY), width: 1920, height: Math.floor(metricsBottom - startY)
                         };
 
                         let contentClip = null;
@@ -129,20 +131,14 @@ def capture_regional_images(target_url):
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                // Increased by 15px (previously -8, now +7 relative to chart bottoms)
                                 maxBottom = Math.max(...bottoms) + 7; 
                             }
-
                             contentClip = {
-                                x: 0,
-                                y: Math.floor(chartsRect.y - 10),
-                                width: 1920,
-                                height: Math.floor(maxBottom - chartsRect.y)
+                                x: 0, y: Math.floor(chartsRect.y - 10), width: 1920, height: Math.floor(maxBottom - chartsRect.y)
                             };
                         } else {
                             contentClip = { x: 0, y: 650, width: 1920, height: 1000 };
                         }
-
                         return { headerClip, contentClip };
                     }
                 """)
@@ -150,34 +146,29 @@ def capture_regional_images(target_url):
                 safe_region = region.lower().replace(' ', '-')
                 safe_date = capture_date.replace('-', '')
 
-                # --- PART 1: HEADER & METRICS ---
+                # --- PART 1 & 2: SCREENSHOT & PARALLEL UPLOAD ---
                 header_filename = f"{safe_region}-header.jpg"
                 page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=90)
-                header_upload = cloudinary.uploader.upload(header_filename, folder="airtableautomation", 
-                                                         public_id=f"{safe_region}-header-{safe_date}")
+                h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-header-{safe_date}")
 
-                # --- PART 2: CHARTS & DISTRIBUTIONS ---
                 content_filename = f"{safe_region}-content.jpg"
                 page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
-                content_upload = cloudinary.uploader.upload(content_filename, folder="airtableautomation", 
-                                                          public_id=f"{safe_region}-content-{safe_date}")
+                c_future = upload_executor.submit(background_upload, content_filename, f"{safe_region}-content-{safe_date}")
 
                 region_entry = {
                     "region": region,
-                    "header_url": header_upload["secure_url"],
-                    "content_url": content_upload["secure_url"],
+                    "h_future": h_future,
+                    "c_future": c_future,
                     "local_header": header_filename,
                     "local_content": content_filename,
                     "date": capture_date,
                     "header_id": header_title,
-                    "in_progress_pages": [],
-                    "completed_gallery_pages": [] 
+                    "in_progress_futures": [],
+                    "completed_futures": [] 
                 }
 
-                def capture_paged_gallery(gallery_label, storage_key):
-                    # Force visibility immediately
+                def capture_paged_gallery(gallery_label, future_key):
                     page.evaluate(f"document.querySelector('[aria-label*=\"{gallery_label}\"]')?.style.setProperty('display', 'block', 'important')")
-                    
                     page_idx = 1
                     while True:
                         gal_info = page.evaluate(f"""
@@ -185,51 +176,50 @@ def capture_regional_images(target_url):
                                 const el = document.querySelector('[aria-label*="{gallery_label}"]');
                                 if (!el) return null;
                                 const rect = el.getBoundingClientRect();
-                                return {{ 
-                                    x: 0, 
-                                    y: rect.top + window.scrollY - 10, 
-                                    width: 1920, 
-                                    height: rect.height + 20 
-                                }};
+                                return {{ x: 0, y: rect.top + window.scrollY - 10, width: 1920, height: rect.height + 20 }};
                             }}
                         """)
                         if not gal_info: break
                         
-                        # Faster scrolling
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(400) 
+                        page.wait_for_timeout(300) 
 
-                        gal_filename = f"{safe_region}-{gallery_label.lower().replace(' ', '-')}-{page_idx}.jpg"
+                        gal_filename = f"{safe_region}-{gallery_label[:3].lower()}-{page_idx}.jpg"
                         page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=80)
                         
-                        gal_upload = cloudinary.uploader.upload(gal_filename, folder="airtableautomation", 
-                                                              public_id=f"{safe_region}-{gallery_label.lower()}{page_idx}-{safe_date}")
-
-                        region_entry[storage_key].append({"local": gal_filename, "url": gal_upload["secure_url"]})
+                        g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{gallery_label[:3].lower()}{page_idx}-{safe_date}")
+                        region_entry[future_key].append({"local": gal_filename, "future": g_future})
 
                         next_btn = page.locator(f'[aria-label*="{gallery_label}"] div[role="button"]:has(path[d*="m4.64.17"])').first
-                        if next_btn.is_visible():
-                            is_disabled = next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true'")
-                            if not is_disabled:
-                                next_btn.click()
-                                page_idx += 1
-                                page.wait_for_timeout(600)
-                            else: break
+                        if next_btn.is_visible() and not next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true'"):
+                            next_btn.click()
+                            page_idx += 1
+                            page.wait_for_timeout(400)
                         else: break
                         if page_idx > 5: break
 
                 if region != "All Regions":
-                    capture_paged_gallery("In Progress", "in_progress_pages")
-                    capture_paged_gallery("Completed Request Gallery", "completed_gallery_pages")
+                    capture_paged_gallery("In Progress", "in_progress_futures")
+                    capture_paged_gallery("Completed Request Gallery", "completed_futures")
 
                 captured_data.append(region_entry)
-                status_placeholder.write(f"✅ **{region}** captured.")
+                status_placeholder.write(f"✅ **{region}** captured (Uploading...)")
                 
             except Exception as e:
                 st.error(f"Error on {region}: {e}")
 
         browser.close()
-    return captured_data
+
+    # Finalize Data: Convert Futures to URLs
+    final_data = []
+    for item in captured_data:
+        item["header_url"] = item.pop("h_future").result()["secure_url"]
+        item["content_url"] = item.pop("c_future").result()["secure_url"]
+        item["in_progress_pages"] = [{"local": f["local"], "url": f["future"].result()["secure_url"]} for f in item.pop("in_progress_futures")]
+        item["completed_gallery_pages"] = [{"local": f["local"], "url": f["future"].result()["secure_url"]} for f in item.pop("completed_futures")]
+        final_data.append(item)
+
+    return final_data
 
 def sync_to_airtable(data_list):
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
@@ -246,11 +236,8 @@ def sync_to_airtable(data_list):
         for g_page in item.get("completed_gallery_pages", []): record_attachments.append({"url": g_page["url"]})
             
         fields = {
-            "Type": record_type,
-            "Date": item["date"],
-            "Attachments": record_attachments,
-            "Header": item["header_url"],
-            "Charts": item["content_url"]
+            "Type": record_type, "Date": item["date"], "Attachments": record_attachments,
+            "Header": item["header_url"], "Charts": item["content_url"]
         }
         
         for i, p in enumerate(item.get("completed_gallery_pages", []), 1):
@@ -260,11 +247,9 @@ def sync_to_airtable(data_list):
         
         records_to_create.append({"fields": fields})
 
-    # Chunking records because Airtable API has a 10-record-per-request limit
     for i in range(0, len(records_to_create), 10):
         chunk = records_to_create[i:i+10]
-        payload = {"records": chunk}
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json={"records": chunk})
         if response.status_code == 200:
             st.success(f"🎉 Created records {i+1} to {min(i+10, len(records_to_create))}")
         else:
@@ -280,19 +265,12 @@ st.title("🗺️ Bi-Weekly Report Capture")
 st.markdown("""
     <style>
     .preview-container {
-        max-height: 700px;
-        overflow-y: auto;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 0px;
-        background: #f9f9f9;
-        margin-bottom: 20px;
+        max-height: 700px; overflow-y: auto; border: 1px solid #ddd;
+        border-radius: 8px; padding: 0px; background: #f9f9f9; margin-bottom: 20px;
     }
     .preview-container img {
-        width: 100%;
-        margin-bottom: 8px; /* Added small pad between images */
-        display: block;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1); /* Subtle depth for overlapping check */
+        width: 100%; margin-bottom: 8px; display: block;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
     </style>
 """, unsafe_allow_html=True)
@@ -306,8 +284,7 @@ col_btn1, col_btn2 = st.columns([1, 4])
 with col_btn1:
     if st.button("🚀 Run Capture"):
         if url_input:
-            results = capture_regional_images(url_input)
-            st.session_state.capture_results = results
+            st.session_state.capture_results = capture_regional_images(url_input)
         else:
             st.warning("Please enter a URL first.")
 with col_btn2:
@@ -317,30 +294,16 @@ with col_btn2:
 
 if st.session_state.capture_results:
     st.divider()
-    
-    num_results = len(st.session_state.capture_results)
-    cols = st.columns(num_results)
-    
+    cols = st.columns(len(st.session_state.capture_results))
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
             st.subheader(item['region'])
-            
-            # Start HTML construction
             html_parts = [f'<div class="preview-container" id="container-{idx}">']
-            
-            # 1. Header
             html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_header"])}" />')
-            
-            # 2. In Progress
             for g in item.get("in_progress_pages", []):
                 html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
-                
-            # 3. Main Content
             html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_content"])}" />')
-            
-            # 4. Completed
             for g in item.get("completed_gallery_pages", []):
                 html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
-                
             html_parts.append('</div>')
             st.markdown("".join(html_parts), unsafe_allow_html=True)
