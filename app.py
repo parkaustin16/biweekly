@@ -131,8 +131,8 @@ def capture_regional_images(target_url):
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                // Increased offset to +40 (was +25) for more padding at the bottom of the charts
-                                maxBottom = Math.max(...bottoms) + 40; 
+                                // Reduced offset to +32 (was +40) to decrease bottom padding by 8px
+                                maxBottom = Math.max(...bottoms) + 32; 
                             }
                             contentClip = {
                                 x: 0, y: Math.floor(chartsRect.y - 10), width: 1920, height: Math.floor(maxBottom - chartsRect.y)
@@ -252,7 +252,7 @@ def sync_to_airtable(data_list):
         chunk = records_to_create[i:i+10]
         response = requests.post(url, headers=headers, json={"records": chunk})
         if response.status_code == 200:
-            st.success(f"🎉 Created records")
+            st.success(f"🎉 Created records {i+1} to {min(i+10, len(records_to_create))}")
         else:
             st.error(f"❌ Sync Error: {response.text}")
     
