@@ -131,7 +131,8 @@ def capture_regional_images(target_url):
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                maxBottom = Math.max(...bottoms) + 7; 
+                                // Increased offset to +25 for more padding at the bottom of the charts
+                                maxBottom = Math.max(...bottoms) + 25; 
                             }
                             contentClip = {
                                 x: 0, y: Math.floor(chartsRect.y - 10), width: 1920, height: Math.floor(maxBottom - chartsRect.y)
@@ -203,7 +204,7 @@ def capture_regional_images(target_url):
                     capture_paged_gallery("Completed Request Gallery", "completed_futures")
 
                 captured_data.append(region_entry)
-                status_placeholder.write(f"✅ **{region}** captured (Uploading...)")
+                status_placeholder.write(f"✅ **{region}** captured")
                 
             except Exception as e:
                 st.error(f"Error on {region}: {e}")
