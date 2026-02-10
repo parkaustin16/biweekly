@@ -233,7 +233,8 @@ def capture_regional_images(target_url):
 
 def sync_to_airtable(data_list):
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
-    headers = {"Authorization": f"Bearer {st.secrets['AIRTOKEN']}", "Content-Type": "application/json"}
+    # Changed secret key from AIRTOKEN to AIRTABLE_TOKEN
+    headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
     
     if not data_list: return None
 
