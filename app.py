@@ -62,7 +62,7 @@ def capture_regional_images(target_url):
                 });
             }
         """)
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(1000)
 
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
@@ -89,9 +89,10 @@ def capture_regional_images(target_url):
                 page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(1500)
 
-                # 2. Logic for Header and Charts
+                # 2. Logic for Header and Charts (Refined to remove interface header capture)
                 layout_info = page.evaluate("""
                     () => {
+                        const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
                         const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.closest('[data-testid="gridRowSection"]');
                         const chartsSection = document.querySelector('[data-testid="page-element:chart"]')?.closest('[data-testid="gridRowSection"]');
 
@@ -101,16 +102,20 @@ def capture_regional_images(target_url):
                             return { x: r.left, y: r.top + window.scrollY, width: r.width, height: r.height };
                         };
 
+                        const titleRect = getRect(titleEl);
                         const metricsRect = getRect(metricsGrid);
                         const chartsRect = getRect(chartsSection);
 
                         // Capture 1: Header + Metrics
+                        // Calculate start point based on the Title element to avoid top nav capture
+                        const startY = titleRect ? Math.max(0, titleRect.y - 10) : 0;
                         const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
+                        
                         const headerClip = {
                             x: 0,
-                            y: 0,
+                            y: Math.floor(startY),
                             width: 1920,
-                            height: Math.floor(metricsBottom)
+                            height: Math.floor(metricsBottom - startY)
                         };
 
                         // Capture 2: Charts (Cleaned bottom boundary)
