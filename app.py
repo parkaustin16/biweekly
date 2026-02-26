@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
 def install_browser_binaries():
-    """Ensures Chromium binaries are present."""
+    """Ensures Chromium binaries are present for Playwright."""
     try:
         subprocess.run(["playwright", "install", "chromium"], check=True)
     except Exception as e:
@@ -21,6 +21,7 @@ def install_browser_binaries():
 install_browser_binaries()
 
 # --- 2. CONFIGURATION ---
+# Assumes Streamlit secrets are configured for Cloudinary and Airtable
 cloudinary.config(
     cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
     api_key = st.secrets["CLOUDINARY_API_KEY"],
@@ -42,15 +43,15 @@ def get_base64_image(image_path):
         return base64.b64encode(img_file.read()).decode()
 
 def background_upload(file_path, public_id):
-    """Uploads to Cloudinary in a background thread."""
+    """Uploads to Cloudinary in a background thread to prevent blocking the scraper."""
     return cloudinary.uploader.upload(file_path, folder="airtableautomation", public_id=public_id)
 
 def capture_regional_images(target_url):
-    regions = ["Asia", "Europe", "LATAM", "Canada", "All Regions"]
+    # Added "MEA" to the regions list as requested
+    regions = ["Asia", "Europe", "LATAM", "Canada", "MEA", "All Regions"]
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
     header_title = "Consolidated Report"
-    upload_futures = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -61,10 +62,11 @@ def capture_regional_images(target_url):
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
-        page.goto(target_url, wait_until="commit") # Faster initial load
+        page.goto(target_url, wait_until="commit")
         page.wait_for_selector('div[role="tab"]', timeout=15000)
         
         # --- CLEANUP UI ELEMENTS ---
+        # Removes cookies, headers, and navigation bars to get a clean report screenshot
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -93,15 +95,15 @@ def capture_regional_images(target_url):
             status_placeholder.write(f"🔄 **{region}**: Capturing...")
             
             try:
-                # 1. Optimized Navigation
+                # 1. Navigate to Regional Tab
                 tab = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab.click()
                 
-                # Wait for content to actually change instead of a fixed timeout
+                # Wait for content load (React paint)
                 page.wait_for_function("() => document.querySelector('.loading-spinner') === null")
-                page.wait_for_timeout(400) # Tiny buffer for React paint
+                page.wait_for_timeout(400)
 
-                # 2. Optimized Rect Calculation
+                # 2. Rect Calculation (Dynamic cropping)
                 layout_info = page.evaluate("""
                     () => {
                         const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
@@ -131,7 +133,6 @@ def capture_regional_images(target_url):
                             let maxBottom = chartsRect.y + chartsRect.height;
                             if (charts.length > 0) {
                                 const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                // Reduced offset to +27 (was +32) to decrease bottom padding by an additional 5px
                                 maxBottom = Math.max(...bottoms) + 27; 
                             }
                             contentClip = {
@@ -168,6 +169,7 @@ def capture_regional_images(target_url):
                     "completed_futures": [] 
                 }
 
+                # Helper to handle paginated galleries within the interface
                 def capture_paged_gallery(gallery_label, future_key):
                     page.evaluate(f"document.querySelector('[aria-label*=\"{gallery_label}\"]')?.style.setProperty('display', 'block', 'important')")
                     page_idx = 1
@@ -223,6 +225,7 @@ def capture_regional_images(target_url):
     return final_data
 
 def sync_to_airtable(data_list):
+    """Sends captured data and Cloudinary links to the Airtable base."""
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
     
@@ -248,6 +251,7 @@ def sync_to_airtable(data_list):
         
         records_to_create.append({"fields": fields})
 
+    # Batch upload to Airtable (Max 10 per request)
     for i in range(0, len(records_to_create), 10):
         chunk = records_to_create[i:i+10]
         response = requests.post(url, headers=headers, json={"records": chunk})
@@ -279,7 +283,7 @@ st.markdown("""
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
 
-url_input = st.text_input("Airtable Interface URL", value="")
+url_input = st.text_input("Airtable Interface URL", placeholder="https://airtable.com/app.../pag...")
 
 col_btn1, col_btn2 = st.columns([1, 4])
 with col_btn1:
@@ -295,6 +299,7 @@ with col_btn2:
 
 if st.session_state.capture_results:
     st.divider()
+    # Display columns for each region including the new MEA region
     cols = st.columns(len(st.session_state.capture_results))
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
