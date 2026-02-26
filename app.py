@@ -202,8 +202,8 @@ def capture_regional_images(target_url):
                         if page_idx > 5: break
 
                 if region != "All Regions":
-                    capture_paged_gallery("In Progress", "in_progress_futures")
-                    capture_paged_gallery("Completed Request Gallery", "completed_futures")
+                    capture_paged_gallery("Tickets in Progress", "in_progress_futures")
+                    capture_paged_gallery("Completed Ticket Gallery", "completed_futures")
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured")
