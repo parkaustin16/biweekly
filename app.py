@@ -48,7 +48,7 @@ def background_upload(file_path, public_id):
 
 def capture_regional_images(target_url):
     # Added "MEA" to the regions list as requested
-    regions = ["Asia", "Europe", "LATAM", "Canada", "MEA", "All Regions"]
+    regions = ["Asia", "EU", "LATAM", "Canada", "MEA", "All Regions"]
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
     header_title = "Consolidated Report"
