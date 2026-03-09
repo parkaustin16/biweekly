@@ -47,15 +47,16 @@ def background_upload(file_path, public_id):
 
 def normalize_type_string(raw_title):
     """
-    Extracts text before |, removes 'IBiWeeklyReport', and removes all spaces.
-    Example: 'W 1 - 2 | LATAM' -> 'W1-2'
-    Example: 'W 1 - 2 IBiWeeklyReport | LATAM' -> 'W1-2'
+    Takes everything before the letter 'I' in the title and removes spaces.
+    Example: 'W1-2 I Bi Weekly Report | MEA' -> 'W1-2'
     """
-    # 1. Take everything before the pipe
+    # 1. Take everything before the pipe if it exists
     base_text = raw_title.split("|")[0].strip() if "|" in raw_title else raw_title.strip()
     
-    # 2. Specifically remove the 'IBiWeeklyReport' phrase
-    base_text = base_text.replace("I BiWeeklyReport", "")
+    # 2. Take everything before the character 'I'
+    # Use split(' I') or split('I') to grab the leading week identifier
+    if "I" in base_text:
+        base_text = base_text.split("I")[0].strip()
     
     # 3. Remove all remaining whitespace
     return re.sub(r'\s+', '', base_text)
