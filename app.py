@@ -47,10 +47,17 @@ def background_upload(file_path, public_id):
 
 def normalize_type_string(raw_title):
     """
-    Extracts text before | and removes all spaces.
+    Extracts text before |, removes 'IBiWeeklyReport', and removes all spaces.
     Example: 'W 1 - 2 | LATAM' -> 'W1-2'
+    Example: 'W 1 - 2 IBiWeeklyReport | LATAM' -> 'W1-2'
     """
+    # 1. Take everything before the pipe
     base_text = raw_title.split("|")[0].strip() if "|" in raw_title else raw_title.strip()
+    
+    # 2. Specifically remove the 'IBiWeeklyReport' phrase
+    base_text = base_text.replace("I BiWeeklyReport", "")
+    
+    # 3. Remove all remaining whitespace
     return re.sub(r'\s+', '', base_text)
 
 def get_region_code(region_name):
@@ -173,7 +180,6 @@ def capture_regional_images(target_url):
 
                 # Capture Galleries (In Progress)
                 if region != "All Regions":
-                    # Function to capture paged items
                     def capture_paged(label):
                         nonlocal img_counter
                         page_idx = 1
