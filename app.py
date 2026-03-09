@@ -54,7 +54,6 @@ def normalize_type_string(raw_title):
     base_text = raw_title.split("|")[0].strip() if "|" in raw_title else raw_title.strip()
     
     # 2. Take everything before the character 'I'
-    # Use split(' I') or split('I') to grab the leading week identifier
     if "I" in base_text:
         base_text = base_text.split("I")[0].strip()
     
@@ -158,20 +157,20 @@ def capture_regional_images(target_url):
                 """)
 
                 region_code = get_region_code(region)
-                img_counter = 1 # Track order for imageN naming
+                img_counter = 1 
                 
                 # --- CAPTURE SEQUENCE ---
                 region_entry = {
                     "region": region,
                     "date": capture_date,
                     "header_id": header_title_raw,
-                    "image_futures": [] # Store order-preserved futures
+                    "image_futures": [] 
                 }
 
                 # Image 1: Header
                 header_filename = f"temp_{region_code}_1.jpg"
                 page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=85)
-                pub_id = f"{region_code}-{normalized_type}-image{img_counter}"
+                pub_id = f"{region_code}-{normalized_type}-image{img_counter}-{capture_date}"
                 region_entry["image_futures"].append({
                     "type": "header",
                     "local": header_filename,
@@ -199,7 +198,7 @@ def capture_regional_images(target_url):
                             
                             fn = f"temp_{region_code}_gal_{img_counter}.jpg"
                             page.screenshot(path=fn, clip=gal_info, type="jpeg", quality=85)
-                            p_id = f"{region_code}-{normalized_type}-image{img_counter}"
+                            p_id = f"{region_code}-{normalized_type}-image{img_counter}-{capture_date}"
                             
                             region_entry["image_futures"].append({
                                 "type": "gallery",
@@ -220,7 +219,7 @@ def capture_regional_images(target_url):
                 # Content/Charts
                 content_filename = f"temp_{region_code}_content.jpg"
                 page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
-                pub_id = f"{region_code}-{normalized_type}-image{img_counter}"
+                pub_id = f"{region_code}-{normalized_type}-image{img_counter}-{capture_date}"
                 region_entry["image_futures"].append({
                     "type": "content",
                     "local": content_filename,
@@ -264,7 +263,6 @@ def sync_to_airtable(data_list):
         record_type = f"{item['header_id'].split('|')[0].strip()} | {item['region']}"
         record_attachments = [{"url": img["url"]} for img in item["images"]]
         
-        # Identify specific URLs for specific fields
         header_url = next((i["url"] for i in item["images"] if i["type"] == "header"), "")
         charts_url = next((i["url"] for i in item["images"] if i["type"] == "content"), "")
         
