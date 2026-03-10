@@ -70,7 +70,6 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Large height to ensure we can scroll to any content
         context = browser.new_context(viewport={'width': 1920, 'height': 8000}, device_scale_factor=2)
         page = context.new_page()
         
@@ -78,7 +77,6 @@ def capture_regional_images(target_url):
         page.goto(target_url, wait_until="networkidle")
         page.wait_for_selector('div[role="tab"]', timeout=20000)
         
-        # Enhanced UI Cleanup: Remove fixed headers/navs that block screenshots
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -90,7 +88,6 @@ def capture_regional_images(target_url):
                 removeSelectors.forEach(selector => {
                     document.querySelectorAll(selector).forEach(el => el.remove());
                 });
-                // Ensure the body doesn't have overflow hidden from modals
                 document.body.style.overflow = 'visible';
             }
         """)
@@ -109,13 +106,10 @@ def capture_regional_images(target_url):
             status_placeholder.write(f"🔄 **{region}**: Processing...")
             
             try:
-                # 1. Switch Tab
                 tab = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab.click()
-                page.wait_for_timeout(1000) # Wait for tab content to transition
+                page.wait_for_timeout(1000)
 
-                # 2. Get Layout Dimensions (Flexible)
-                # This calculates the exact bounding boxes based on whatever is actually on screen
                 layout_info = page.evaluate("""
                     () => {
                         const getRect = (el) => {
@@ -148,7 +142,6 @@ def capture_regional_images(target_url):
                     "image_futures": [] 
                 }
 
-                # Image 1: Header + Metrics
                 header_filename = f"temp_{region_code}_1.jpg"
                 page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=90)
                 
@@ -160,21 +153,18 @@ def capture_regional_images(target_url):
                 })
                 img_counter += 1
 
-                # 3. Flexible Gallery Capture (Finds exact box no matter how many records)
                 def capture_dynamic_gallery(label_text):
                     nonlocal img_counter
                     page_idx = 1
                     
-                    while page_idx <= 10: # Limit pages to prevent infinite loops
-                        # JS logic to find the specific gallery box for this label
+                    while page_idx <= 10:
                         gal_rect = page.evaluate(f"""
                             (label) => {{
-                                // Find any header or text containing the label
-                                const elements = Array.from(document.querySelectorAll('h1, h2, h3, h4, div.font-weight-bold'));
-                                const header = elements.find(el => el.innerText && el.innerText.includes(label));
+                                // Use the exact h2 classes provided for precise matching
+                                const elements = Array.from(document.querySelectorAll('h2.font-family-default.heading-size-xsmall, h1, h3, div.font-weight-strong'));
+                                const header = elements.find(el => el.innerText && el.innerText.trim() === label);
                                 if (!header) return null;
 
-                                // Navigate up to the actual component container
                                 const container = header.closest('[data-testid="gridRowSection"]') || 
                                                   header.closest('[data-testid="page-element:gallery"]') ||
                                                   header.parentElement.parentElement;
@@ -194,15 +184,13 @@ def capture_regional_images(target_url):
                         if not gal_rect:
                             break
                         
-                        # Scroll to it
                         page.mouse.wheel(0, gal_rect['y'] - 200)
                         page.wait_for_timeout(500)
 
-                        # Re-calculate after scroll to ensure accuracy
                         gal_rect = page.evaluate(f"""
                             (label) => {{
-                                const elements = Array.from(document.querySelectorAll('h1, h2, h3, h4, div.font-weight-bold'));
-                                const header = elements.find(el => el.innerText && el.innerText.includes(label));
+                                const elements = Array.from(document.querySelectorAll('h2.font-family-default.heading-size-xsmall, h1, h3, div.font-weight-strong'));
+                                const header = elements.find(el => el.innerText && el.innerText.trim() === label);
                                 const container = header.closest('[data-testid="gridRowSection"]') || header.closest('[data-testid="page-element:gallery"]');
                                 const r = container.getBoundingClientRect();
                                 return {{ x: 0, y: Math.floor(r.top + window.scrollY - 10), width: 1920, height: Math.floor(r.height + 20) }};
@@ -220,8 +208,6 @@ def capture_regional_images(target_url):
                         })
                         img_counter += 1
 
-                        # Look for "Next" button specifically within this gallery container
-                        # Airtable uses specific SVG paths for the chevron
                         next_btn = page.locator(f'div[data-testid="gridRowSection"]:has-text("{label_text}")') \
                                        .locator('div[role="button"]:has(svg), button:has(svg)') \
                                        .filter(has=page.locator('path[d*="m4.64.17"]')) \
@@ -229,7 +215,7 @@ def capture_regional_images(target_url):
 
                         if next_btn.is_visible() and not next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true'"):
                             next_btn.click()
-                            page.wait_for_timeout(1000) # Wait for records to swap
+                            page.wait_for_timeout(1000)
                             page_idx += 1
                         else:
                             break
@@ -237,7 +223,6 @@ def capture_regional_images(target_url):
                 if region != "All Regions":
                     capture_dynamic_gallery("Tickets in Progress")
 
-                # 4. Capture Chart Section (Flexible Height)
                 chart_info = page.evaluate("""
                     () => {
                         const charts = document.querySelectorAll('[data-testid="page-element:chart"]');
@@ -278,7 +263,6 @@ def capture_regional_images(target_url):
 
         browser.close()
 
-    # Finalize Futures
     final_data = []
     for item in captured_data:
         processed_images = []
@@ -301,7 +285,6 @@ def sync_to_airtable(data_list):
         record_type = f"{item['header_id'].split('|')[0].strip()} | {item['region']}"
         record_attachments = [{"url": img["url"]} for img in item["images"]]
         
-        # Determine specific images for distinct fields
         header_url = next((i["url"] for i in item["images"] if i["type"] == "header"), "")
         charts_url = next((i["url"] for i in item["images"] if i["type"] == "charts"), "")
         
@@ -352,5 +335,12 @@ if st.session_state.capture_results:
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
             st.subheader(item['region'])
+            # Create a "seamless" vertical stack using HTML/CSS
+            # This removes the gaps between st.image elements
+            st.markdown('<div style="display: flex; flex-direction: column;">', unsafe_allow_html=True)
             for img in item["images"]:
+                # Using st.image but wrapped in a div with no bottom margin
                 st.image(img['local'], use_container_width=True)
+                # Adding a small hack to ensure no streamlit spacing
+                st.markdown('<div style="margin-top: -15px;"></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
