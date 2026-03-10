@@ -46,22 +46,12 @@ def background_upload(file_path, public_id):
     return cloudinary.uploader.upload(file_path, folder="airtableautomation", public_id=public_id)
 
 def normalize_type_string(raw_title):
-    """
-    Takes everything before the letter 'I' in the title and removes spaces.
-    Example: 'W1-2 I Bi Weekly Report | MEA' -> 'W1-2'
-    """
-    # 1. Take everything before the pipe if it exists
     base_text = raw_title.split("|")[0].strip() if "|" in raw_title else raw_title.strip()
-    
-    # 2. Take everything before the character 'I'
     if "I" in base_text:
         base_text = base_text.split("I")[0].strip()
-    
-    # 3. Remove all remaining whitespace
     return re.sub(r'\s+', '', base_text)
 
 def get_region_code(region_name):
-    """Maps display names to specific lowercase codes."""
     mapping = {
         "LATAM": "latam",
         "Asia": "asia",
@@ -80,26 +70,28 @@ def capture_regional_images(target_url):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width': 1920, 'height': 5000}, device_scale_factor=2)
+        # Large height to ensure we can scroll to any content
+        context = browser.new_context(viewport={'width': 1920, 'height': 8000}, device_scale_factor=2)
         page = context.new_page()
         
         st.info("🔗 Connecting to Airtable Interface...")
-        page.goto(target_url, wait_until="commit")
-        page.wait_for_selector('div[role="tab"]', timeout=15000)
+        page.goto(target_url, wait_until="networkidle")
+        page.wait_for_selector('div[role="tab"]', timeout=20000)
         
-        # UI Cleanup
+        # Enhanced UI Cleanup: Remove fixed headers/navs that block screenshots
         page.evaluate("""
             () => {
                 const removeSelectors = [
                     '#onetrust-banner-sdk', '.onetrust-pc-dark-filter',
                     '[id*="cookie"]', '[class*="cookie"]',
-                    'header.flex.flex-none.items-center.width-full',
-                    '.flex.items-center.py2.px2-and-half.border-bottom',
-                    '[data-testid="interface-header"]', '.interfaceHeader'
+                    'header', '.interfaceHeader', '[data-testid="interface-header"]',
+                    '.flex.items-center.py2.px2-and-half.border-bottom'
                 ];
                 removeSelectors.forEach(selector => {
                     document.querySelectorAll(selector).forEach(el => el.remove());
                 });
+                // Ensure the body doesn't have overflow hidden from modals
+                document.body.style.overflow = 'visible';
             }
         """)
 
@@ -114,52 +106,41 @@ def capture_regional_images(target_url):
 
         for region in regions:
             status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 **{region}**: Capturing...")
+            status_placeholder.write(f"🔄 **{region}**: Processing...")
             
             try:
-                # 1. Navigate to Regional Tab
+                # 1. Switch Tab
                 tab = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab.click()
-                page.wait_for_function("() => document.querySelector('.loading-spinner') === null")
-                page.wait_for_timeout(400)
+                page.wait_for_timeout(1000) # Wait for tab content to transition
 
-                # 2. Rect Calculation
+                # 2. Get Layout Dimensions (Flexible)
+                # This calculates the exact bounding boxes based on whatever is actually on screen
                 layout_info = page.evaluate("""
                     () => {
-                        const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
-                        const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.closest('[data-testid="gridRowSection"]');
-                        const chartsSection = document.querySelector('[data-testid="page-element:chart"]')?.closest('[data-testid="gridRowSection"]');
                         const getRect = (el) => {
                             if (!el) return null;
                             const r = el.getBoundingClientRect();
                             return { x: r.left, y: r.top + window.scrollY, width: r.width, height: r.height };
                         };
+
+                        const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
+                        const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.closest('[data-testid="gridRowSection"]');
+                        
                         const titleRect = getRect(titleEl);
                         const metricsRect = getRect(metricsGrid);
-                        const chartsRect = getRect(chartsSection);
+
                         const startY = titleRect ? titleRect.y : 0;
-                        const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
-                        const headerClip = { x: 0, y: Math.floor(startY), width: 1920, height: Math.floor(metricsBottom - startY) };
-                        let contentClip = null;
-                        if (chartsRect) {
-                            const charts = chartsSection.querySelectorAll('[data-testid="page-element:chart"]');
-                            let maxBottom = chartsRect.y + chartsRect.height;
-                            if (charts.length > 0) {
-                                const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                maxBottom = Math.max(...bottoms) + 27; 
-                            }
-                            contentClip = { x: 0, y: Math.floor(chartsRect.y - 10), width: 1920, height: Math.floor(maxBottom - chartsRect.y) };
-                        } else {
-                            contentClip = { x: 0, y: 650, width: 1920, height: 1000 };
-                        }
-                        return { headerClip, contentClip };
+                        const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 550;
+
+                        return {
+                            headerClip: { x: 0, y: Math.floor(startY - 10), width: 1920, height: Math.floor(metricsBottom - startY + 20) }
+                        };
                     }
                 """)
 
                 region_code = get_region_code(region)
                 img_counter = 1 
-                
-                # --- CAPTURE SEQUENCE ---
                 region_entry = {
                     "region": region,
                     "date": capture_date,
@@ -167,10 +148,11 @@ def capture_regional_images(target_url):
                     "image_futures": [] 
                 }
 
-                # Image 1: Header
+                # Image 1: Header + Metrics
                 header_filename = f"temp_{region_code}_1.jpg"
-                page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=85)
-                pub_id = f"{region_code}-{normalized_type}-image{img_counter}-{capture_date}"
+                page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=90)
+                
+                pub_id = f"{region_code}-{normalized_type}-img{img_counter}-{capture_date}"
                 region_entry["image_futures"].append({
                     "type": "header",
                     "local": header_filename,
@@ -178,92 +160,131 @@ def capture_regional_images(target_url):
                 })
                 img_counter += 1
 
-                # Capture Galleries
+                # 3. Flexible Gallery Capture (Finds exact box no matter how many records)
+                def capture_dynamic_gallery(label_text):
+                    nonlocal img_counter
+                    page_idx = 1
+                    
+                    while page_idx <= 10: # Limit pages to prevent infinite loops
+                        # JS logic to find the specific gallery box for this label
+                        gal_rect = page.evaluate(f"""
+                            (label) => {{
+                                // Find any header or text containing the label
+                                const elements = Array.from(document.querySelectorAll('h1, h2, h3, h4, div.font-weight-bold'));
+                                const header = elements.find(el => el.innerText && el.innerText.includes(label));
+                                if (!header) return null;
+
+                                // Navigate up to the actual component container
+                                const container = header.closest('[data-testid="gridRowSection"]') || 
+                                                  header.closest('[data-testid="page-element:gallery"]') ||
+                                                  header.parentElement.parentElement;
+                                
+                                if (!container) return null;
+                                
+                                const r = container.getBoundingClientRect();
+                                return {{ 
+                                    x: 0, 
+                                    y: Math.floor(r.top + window.scrollY - 15), 
+                                    width: 1920, 
+                                    height: Math.floor(r.height + 30) 
+                                }};
+                            }}
+                        """, label_text)
+
+                        if not gal_rect:
+                            break
+                        
+                        # Scroll to it
+                        page.mouse.wheel(0, gal_rect['y'] - 200)
+                        page.wait_for_timeout(500)
+
+                        # Re-calculate after scroll to ensure accuracy
+                        gal_rect = page.evaluate(f"""
+                            (label) => {{
+                                const elements = Array.from(document.querySelectorAll('h1, h2, h3, h4, div.font-weight-bold'));
+                                const header = elements.find(el => el.innerText && el.innerText.includes(label));
+                                const container = header.closest('[data-testid="gridRowSection"]') || header.closest('[data-testid="page-element:gallery"]');
+                                const r = container.getBoundingClientRect();
+                                return {{ x: 0, y: Math.floor(r.top + window.scrollY - 10), width: 1920, height: Math.floor(r.height + 20) }};
+                            }}
+                        """, label_text)
+
+                        fn = f"temp_{region_code}_gal_{img_counter}.jpg"
+                        page.screenshot(path=fn, clip=gal_rect, type="jpeg", quality=90)
+                        
+                        p_id = f"{region_code}-{normalized_type}-img{img_counter}-{capture_date}"
+                        region_entry["image_futures"].append({
+                            "type": "gallery",
+                            "local": fn,
+                            "future": upload_executor.submit(background_upload, fn, p_id)
+                        })
+                        img_counter += 1
+
+                        # Look for "Next" button specifically within this gallery container
+                        # Airtable uses specific SVG paths for the chevron
+                        next_btn = page.locator(f'div[data-testid="gridRowSection"]:has-text("{label_text}")') \
+                                       .locator('div[role="button"]:has(svg), button:has(svg)') \
+                                       .filter(has=page.locator('path[d*="m4.64.17"]')) \
+                                       .last
+
+                        if next_btn.is_visible() and not next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true'"):
+                            next_btn.click()
+                            page.wait_for_timeout(1000) # Wait for records to swap
+                            page_idx += 1
+                        else:
+                            break
+
                 if region != "All Regions":
-                    def capture_paged(label):
-                        nonlocal img_counter
-                        page_idx = 1
-                        while page_idx <= 5:
-                            gal_info = page.evaluate(f"""
-                                () => {{
-                                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
-                                    const header = headers.find(h => h.innerText && h.innerText.includes("{label}"));
-                                    if (header) {{
-                                        const container = header.closest('[data-testid="gridRowSection"]') || header.closest('[data-testid="page-element:gallery"]');
-                                        if (container) {{
-                                            const rect = container.getBoundingClientRect();
-                                            return {{ x: 0, y: rect.top + window.scrollY - 10, width: 1920, height: rect.height + 20 }};
-                                        }}
-                                    }}
-                                    const el = document.querySelector('[aria-label*="{label}"]');
-                                    if (!el) return null;
-                                    const rect = el.getBoundingClientRect();
-                                    return {{ x: 0, y: rect.top + window.scrollY - 10, width: 1920, height: rect.height + 20 }};
-                                }}
-                            """)
-                            if not gal_info: break
-                            page.mouse.wheel(0, gal_info['y'] - 100)
-                            page.wait_for_timeout(300)
-                            
-                            fn = f"temp_{region_code}_gal_{img_counter}.jpg"
-                            page.screenshot(path=fn, clip=gal_info, type="jpeg", quality=85)
-                            p_id = f"{region_code}-{normalized_type}-image{img_counter}-{capture_date}"
-                            
-                            region_entry["image_futures"].append({
-                                "type": "gallery",
-                                "local": fn,
-                                "future": upload_executor.submit(background_upload, fn, p_id)
-                            })
-                            img_counter += 1
-                            
-                            # Find the target section first, then the Next button inside it
-                            section_locator = page.locator('div[data-testid="gridRowSection"], div[data-testid="page-element:gallery"]').filter(has_text=label).first
-                            next_btn = section_locator.locator('div[role="button"]:has(path[d*="m4.64.17"]), button[aria-label="Next page"], div[aria-label="Next page"]').last
-                            
-                            # Fallback if the strict layout locator fails
-                            if not next_btn.is_visible():
-                                next_btn = page.locator(f'[aria-label*="{label}"] div[role="button"]:has(path[d*="m4.64.17"])').first
+                    capture_dynamic_gallery("Tickets in Progress")
 
-                            if next_btn.is_visible() and not next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')"):
-                                next_btn.click()
-                                page_idx += 1
-                                page.wait_for_timeout(800) # Increased timeout to allow page animation/render
-                            else: 
-                                break
+                # 4. Capture Chart Section (Flexible Height)
+                chart_info = page.evaluate("""
+                    () => {
+                        const charts = document.querySelectorAll('[data-testid="page-element:chart"]');
+                        if (charts.length === 0) return null;
+                        
+                        let minTop = Infinity;
+                        let maxBottom = 0;
+                        
+                        charts.forEach(c => {
+                            const r = c.closest('[data-testid="gridRowSection"]').getBoundingClientRect();
+                            minTop = Math.min(minTop, r.top + window.scrollY);
+                            maxBottom = Math.max(maxBottom, r.bottom + window.scrollY);
+                        });
+                        
+                        return { x: 0, y: Math.floor(minTop - 20), width: 1920, height: Math.floor(maxBottom - minTop + 40) };
+                    }
+                """)
 
-                    capture_paged("Tickets in Progress")
+                if chart_info:
+                    content_filename = f"temp_{region_code}_charts.jpg"
+                    page.screenshot(path=content_filename, clip=chart_info, type="jpeg", quality=90)
+                    p_id = f"{region_code}-{normalized_type}-img{img_counter}-{capture_date}"
+                    region_entry["image_futures"].append({
+                        "type": "charts",
+                        "local": content_filename,
+                        "future": upload_executor.submit(background_upload, content_filename, p_id)
+                    })
+                    img_counter += 1
 
-                # Content/Charts
-                content_filename = f"temp_{region_code}_content.jpg"
-                page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
-                pub_id = f"{region_code}-{normalized_type}-image{img_counter}-{capture_date}"
-                region_entry["image_futures"].append({
-                    "type": "content",
-                    "local": content_filename,
-                    "future": upload_executor.submit(background_upload, content_filename, pub_id)
-                })
-                img_counter += 1
-
-                # Completed Gallery
                 if region != "All Regions":
-                    capture_paged("Completed Ticket Gallery")
+                    capture_dynamic_gallery("Completed Ticket Gallery")
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured")
                 
             except Exception as e:
-                st.error(f"Error on {region}: {e}")
+                st.error(f"Error on {region}: {str(e)}")
 
         browser.close()
 
-    # Finalize Data: Convert Futures to URLs
+    # Finalize Futures
     final_data = []
     for item in captured_data:
         processed_images = []
         for img in item["image_futures"]:
-            url = img["future"].result()["secure_url"]
-            processed_images.append({"type": img["type"], "local": img["local"], "url": url})
-        
+            res = img["future"].result()
+            processed_images.append({"type": img["type"], "local": img["local"], "url": res["secure_url"]})
         item["images"] = processed_images
         final_data.append(item)
 
@@ -273,67 +294,54 @@ def sync_to_airtable(data_list):
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
     
-    if not data_list: return None
+    if not data_list: return
 
-    records_to_create = []
+    records = []
     for item in data_list:
         record_type = f"{item['header_id'].split('|')[0].strip()} | {item['region']}"
         record_attachments = [{"url": img["url"]} for img in item["images"]]
         
+        # Determine specific images for distinct fields
         header_url = next((i["url"] for i in item["images"] if i["type"] == "header"), "")
-        charts_url = next((i["url"] for i in item["images"] if i["type"] == "content"), "")
+        charts_url = next((i["url"] for i in item["images"] if i["type"] == "charts"), "")
         
-        fields = {
-            "Type": record_type, 
-            "Date": item["date"], 
-            "Attachments": record_attachments,
-            "Header": header_url, 
-            "Charts": charts_url
-        }
-        
-        records_to_create.append({"fields": fields})
+        records.append({
+            "fields": {
+                "Type": record_type,
+                "Date": item["date"],
+                "Attachments": record_attachments,
+                "Header": header_url,
+                "Charts": charts_url
+            }
+        })
 
-    for i in range(0, len(records_to_create), 10):
-        chunk = records_to_create[i:i+10]
-        response = requests.post(url, headers=headers, json={"records": chunk})
-        if response.status_code == 200:
-            st.success(f"🎉 Created records {i+1} to {min(i+10, len(records_to_create))}")
+    for i in range(0, len(records), 10):
+        chunk = records[i:i+10]
+        resp = requests.post(url, headers=headers, json={"records": chunk})
+        if resp.status_code == 200:
+            st.success(f"🎉 Synced {len(chunk)} records.")
         else:
-            st.error(f"❌ Sync Error: {response.text}")
+            st.error(f"❌ Error: {resp.text}")
     
     st.session_state.capture_results = None
 
-# --- 4. USER INTERFACE ---
-
+# --- UI ---
 st.set_page_config(page_title="Airtable Report Capture", layout="wide")
 st.title("🗺️ Bi-Weekly Report Capture")
-
-st.markdown("""
-    <style>
-    .preview-container {
-        max-height: 700px; overflow-y: auto; border: 1px solid #ddd;
-        border-radius: 8px; padding: 0px; background: #f9f9f9; margin-bottom: 20px;
-    }
-    .preview-container img {
-        width: 100%; margin-bottom: 8px; display: block;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    </style>
-""", unsafe_allow_html=True)
 
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
 
-url_input = st.text_input("Airtable Interface URL", placeholder="https://airtable.com/app...")
+url_input = st.text_input("Airtable Interface URL")
 
-col_btn1, col_btn2 = st.columns([1, 4])
-with col_btn1:
+c1, c2 = st.columns([1, 4])
+with c1:
     if st.button("🚀 Run Capture"):
         if url_input:
             st.session_state.capture_results = capture_regional_images(url_input)
         else:
-            st.warning("Please enter a URL first.")
-with col_btn2:
+            st.warning("Enter a URL.")
+with c2:
     if st.session_state.capture_results:
         if st.button("📤 Upload to Airtable", type="primary"):
             sync_to_airtable(st.session_state.capture_results)
@@ -344,8 +352,5 @@ if st.session_state.capture_results:
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
             st.subheader(item['region'])
-            html_parts = [f'<div class="preview-container">']
             for img in item["images"]:
-                html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(img["local"])}" />')
-            html_parts.append('</div>')
-            st.markdown("".join(html_parts), unsafe_allow_html=True)
+                st.image(img['local'], use_container_width=True)
