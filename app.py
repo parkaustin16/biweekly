@@ -79,14 +79,18 @@ def capture_regional_images(target_url):
             }
         """)
 
-        # Extracting the Week ID for the filename (Everything before the "|")
+        # Extracting the Week ID for the filename (Everything before the "I")
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
             raw_text = header_locator.inner_text(timeout=3000)
             
-            # Logic: Split by "|" and take the first part (e.g., "W1-2")
-            if "|" in raw_text:
+            # Logic: Split by "I" and take the first part (e.g., "W1-2")
+            if "I" in raw_text:
+                week_id = raw_text.split("I")[0].strip()
+                header_title_clean = raw_text.strip()
+            # Fallback for the pipe character just in case
+            elif "|" in raw_text:
                 week_id = raw_text.split("|")[0].strip()
                 header_title_clean = raw_text.strip()
             else:
@@ -252,7 +256,7 @@ def sync_to_airtable(data_list):
         for i, p in enumerate(item.get("completed_gallery_pages", []), 1):
             if i <= 3: fields[f"Gallery {i}"] = p["url"]
         for i, p in enumerate(item.get("in_progress_pages", []), 1):
-            if i <= 3: fields[f"Progress {i}"] = p["url"]
+            if i <= "3": fields[f"Progress {i}"] = p["url"]
         
         records_to_create.append({"fields": fields})
 
