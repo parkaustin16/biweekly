@@ -261,7 +261,7 @@ def sync_to_airtable(data_list):
         for i, p in enumerate(item.get("completed_gallery_pages", []), 1):
             if i <= 3: fields[f"Gallery {i}"] = p["url"]
         for i, p in enumerate(item.get("in_progress_pages", []), 1):
-            if i <= "3": fields[f"Progress {i}"] = p["url"]
+            if i <= 3: fields[f"Progress {i}"] = p["url"]
         
         records_to_create.append({"fields": fields})
 
