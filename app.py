@@ -21,7 +21,6 @@ def install_browser_binaries():
 install_browser_binaries()
 
 # --- 2. CONFIGURATION ---
-# Assumes Streamlit secrets are configured for Cloudinary and Airtable
 cloudinary.config(
     cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
     api_key = st.secrets["CLOUDINARY_API_KEY"],
@@ -29,7 +28,6 @@ cloudinary.config(
     secure = True
 )
 
-# Global executor for background uploads to speed up the loop
 upload_executor = ThreadPoolExecutor(max_workers=5)
 
 # --- 3. CORE LOGIC ---
@@ -43,15 +41,15 @@ def get_base64_image(image_path):
         return base64.b64encode(img_file.read()).decode()
 
 def background_upload(file_path, public_id):
-    """Uploads to Cloudinary in a background thread to prevent blocking the scraper."""
+    """Uploads to Cloudinary in a background thread."""
     return cloudinary.uploader.upload(file_path, folder="airtableautomation", public_id=public_id)
 
 def capture_regional_images(target_url):
-    # Added "MEA" to the regions list as requested
     regions = ["Asia", "EU", "LATAM", "Canada", "MEA", "All Regions"]
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
-    header_title = "Consolidated Report"
+    header_title_clean = "Report"
+    week_id = "W0"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -66,7 +64,6 @@ def capture_regional_images(target_url):
         page.wait_for_selector('div[role="tab"]', timeout=15000)
         
         # --- CLEANUP UI ELEMENTS ---
-        # Removes cookies, headers, and navigation bars to get a clean report screenshot
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -82,11 +79,19 @@ def capture_regional_images(target_url):
             }
         """)
 
+        # Extracting the Week ID for the filename (Everything before the "|")
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
-            header_title_raw = header_locator.inner_text(timeout=3000)
-            header_title = header_title_raw.split("|")[0].strip() if "|" in header_title_raw else header_title_raw.strip()
+            raw_text = header_locator.inner_text(timeout=3000)
+            
+            # Logic: Split by "|" and take the first part (e.g., "W1-2")
+            if "|" in raw_text:
+                week_id = raw_text.split("|")[0].strip()
+                header_title_clean = raw_text.strip()
+            else:
+                week_id = raw_text.strip().replace(" ", "-")
+                header_title_clean = raw_text.strip()
         except Exception:
             pass 
 
@@ -95,15 +100,11 @@ def capture_regional_images(target_url):
             status_placeholder.write(f"🔄 **{region}**: Capturing...")
             
             try:
-                # 1. Navigate to Regional Tab
                 tab = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab.click()
-                
-                # Wait for content load (React paint)
                 page.wait_for_function("() => document.querySelector('.loading-spinner') === null")
-                page.wait_for_timeout(400)
+                page.wait_for_timeout(500)
 
-                # 2. Rect Calculation (Dynamic cropping)
                 layout_info = page.evaluate("""
                     () => {
                         const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
@@ -145,17 +146,20 @@ def capture_regional_images(target_url):
                     }
                 """)
 
-                safe_region = region.lower().replace(' ', '-')
+                safe_region = region.replace(' ', '-')
                 safe_date = capture_date.replace('-', '')
+                # Clean up the week_id for filenames (remove spaces)
+                filename_week = week_id.replace(" ", "-")
 
-                # --- PART 1 & 2: SCREENSHOT & PARALLEL UPLOAD ---
+                # --- PART 1 & 2: SCREENSHOT & FILENAME FORMATTING ---
+                # Format: region-week-imageN-date
                 header_filename = f"{safe_region}-header.jpg"
                 page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=85)
-                h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-header-{safe_date}")
+                h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-{filename_week}-header-{safe_date}")
 
                 content_filename = f"{safe_region}-content.jpg"
                 page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
-                c_future = upload_executor.submit(background_upload, content_filename, f"{safe_region}-content-{safe_date}")
+                c_future = upload_executor.submit(background_upload, content_filename, f"{safe_region}-{filename_week}-charts-{safe_date}")
 
                 region_entry = {
                     "region": region,
@@ -164,12 +168,11 @@ def capture_regional_images(target_url):
                     "local_header": header_filename,
                     "local_content": content_filename,
                     "date": capture_date,
-                    "header_id": header_title,
+                    "header_id": header_title_clean,
                     "in_progress_futures": [],
                     "completed_futures": [] 
                 }
 
-                # Helper to handle paginated galleries within the interface
                 def capture_paged_gallery(gallery_label, future_key):
                     page.evaluate(f"document.querySelector('[aria-label*=\"{gallery_label}\"]')?.style.setProperty('display', 'block', 'important')")
                     page_idx = 1
@@ -187,10 +190,12 @@ def capture_regional_images(target_url):
                         page.mouse.wheel(0, gal_info['y'] - 100)
                         page.wait_for_timeout(300) 
 
-                        gal_filename = f"{safe_region}-{gallery_label[:3].lower()}-{page_idx}.jpg"
+                        gal_filename = f"{safe_region}-gal-{page_idx}.jpg"
                         page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
                         
-                        g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{gallery_label[:3].lower()}{page_idx}-{safe_date}")
+                        # Gallery format: region-week-galleryN-date
+                        type_tag = "progress" if "Progress" in gallery_label else "gallery"
+                        g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{filename_week}-{type_tag}{page_idx}-{safe_date}")
                         region_entry[future_key].append({"local": gal_filename, "future": g_future})
 
                         next_btn = page.locator(f'[aria-label*="{gallery_label}"] div[role="button"]:has(path[d*="m4.64.17"])').first
@@ -251,7 +256,6 @@ def sync_to_airtable(data_list):
         
         records_to_create.append({"fields": fields})
 
-    # Batch upload to Airtable (Max 10 per request)
     for i in range(0, len(records_to_create), 10):
         chunk = records_to_create[i:i+10]
         response = requests.post(url, headers=headers, json={"records": chunk})
@@ -283,7 +287,7 @@ st.markdown("""
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
 
-url_input = st.text_input("Airtable Interface URL", placeholder="https://airtable.com/app.../pag...")
+url_input = st.text_input("Airtable Interface URL", placeholder="https://airtable.com/app...")
 
 col_btn1, col_btn2 = st.columns([1, 4])
 with col_btn1:
@@ -299,7 +303,6 @@ with col_btn2:
 
 if st.session_state.capture_results:
     st.divider()
-    # Display columns for each region including the new MEA region
     cols = st.columns(len(st.session_state.capture_results))
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
