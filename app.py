@@ -59,9 +59,14 @@ def capture_regional_images(target_url):
         )
         page = context.new_page()
         
-        st.info("🔗 Connecting to Airtable Interface...")
+        connection_status = st.empty()
+        connection_status.info("🔗 Connecting to Airtable Interface...")
+        
         page.goto(target_url, wait_until="commit")
         page.wait_for_selector('div[role="tab"]', timeout=15000)
+        
+        # Update status once connected
+        connection_status.success("✅ Connected to Airtable Interface")
         
         # --- CLEANUP UI ELEMENTS ---
         page.evaluate("""
