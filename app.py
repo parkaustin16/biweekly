@@ -178,7 +178,7 @@ def capture_regional_images(target_url):
                 })
                 img_counter += 1
 
-                # Capture Galleries (In Progress)
+                # Capture Galleries
                 if region != "All Regions":
                     def capture_paged(label):
                         nonlocal img_counter
@@ -186,6 +186,15 @@ def capture_regional_images(target_url):
                         while page_idx <= 5:
                             gal_info = page.evaluate(f"""
                                 () => {{
+                                    const headers = Array.from(document.querySelectorAll('h1, h2, h3, h4, div'));
+                                    const header = headers.find(h => h.innerText && h.innerText.includes("{label}"));
+                                    if (header) {{
+                                        const container = header.closest('[data-testid="gridRowSection"]') || header.closest('[data-testid="page-element:gallery"]');
+                                        if (container) {{
+                                            const rect = container.getBoundingClientRect();
+                                            return {{ x: 0, y: rect.top + window.scrollY - 10, width: 1920, height: rect.height + 20 }};
+                                        }}
+                                    }}
                                     const el = document.querySelector('[aria-label*="{label}"]');
                                     if (!el) return null;
                                     const rect = el.getBoundingClientRect();
@@ -207,12 +216,20 @@ def capture_regional_images(target_url):
                             })
                             img_counter += 1
                             
-                            next_btn = page.locator(f'[aria-label*="{label}"] div[role="button"]:has(path[d*="m4.64.17"])').first
-                            if next_btn.is_visible() and not next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true'"):
+                            # Find the target section first, then the Next button inside it
+                            section_locator = page.locator('div[data-testid="gridRowSection"], div[data-testid="page-element:gallery"]').filter(has_text=label).first
+                            next_btn = section_locator.locator('div[role="button"]:has(path[d*="m4.64.17"]), button[aria-label="Next page"], div[aria-label="Next page"]').last
+                            
+                            # Fallback if the strict layout locator fails
+                            if not next_btn.is_visible():
+                                next_btn = page.locator(f'[aria-label*="{label}"] div[role="button"]:has(path[d*="m4.64.17"])').first
+
+                            if next_btn.is_visible() and not next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')"):
                                 next_btn.click()
                                 page_idx += 1
-                                page.wait_for_timeout(400)
-                            else: break
+                                page.wait_for_timeout(800) # Increased timeout to allow page animation/render
+                            else: 
+                                break
 
                     capture_paged("Tickets in Progress")
 
