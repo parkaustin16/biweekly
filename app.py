@@ -107,6 +107,7 @@ def capture_regional_images(target_url):
         for region in regions:
             status_placeholder = st.empty()
             status_placeholder.write(f"🔄 **{region}**: Capturing...")
+            img_counter = 1
             
             try:
                 tab = page.locator(f'div[role="tab"]:has-text("{region}")')
@@ -157,32 +158,26 @@ def capture_regional_images(target_url):
 
                 safe_region = region.replace(' ', '-')
                 safe_date = capture_date.replace('-', '')
-                # Clean up the week_id for filenames (remove spaces)
                 filename_week = week_id.replace(" ", "-")
 
-                # --- PART 1 & 2: SCREENSHOT & FILENAME FORMATTING ---
-                # Format: region-week-imageN-date
+                # --- PART 1: HEADER (Always Image 1) ---
                 header_filename = f"{safe_region}-header.jpg"
                 page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=85)
-                h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-{filename_week}-header-{safe_date}")
-
-                content_filename = f"{safe_region}-content.jpg"
-                page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
-                c_future = upload_executor.submit(background_upload, content_filename, f"{safe_region}-{filename_week}-charts-{safe_date}")
+                h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
+                img_counter += 1
 
                 region_entry = {
                     "region": region,
                     "h_future": h_future,
-                    "c_future": c_future,
-                    "local_header": header_filename,
-                    "local_content": content_filename,
                     "date": capture_date,
                     "header_id": header_title_clean,
+                    "local_header": header_filename,
                     "in_progress_futures": [],
                     "completed_futures": [] 
                 }
 
                 def capture_paged_gallery(gallery_label, future_key):
+                    nonlocal img_counter
                     page.evaluate(f"document.querySelector('[aria-label*=\"{gallery_label}\"]')?.style.setProperty('display', 'block', 'important')")
                     page_idx = 1
                     while True:
@@ -202,21 +197,32 @@ def capture_regional_images(target_url):
                         gal_filename = f"{safe_region}-gal-{page_idx}.jpg"
                         page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
                         
-                        # Gallery format: region-week-galleryN-date
-                        type_tag = "progress" if "Progress" in gallery_label else "gallery"
-                        g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{filename_week}-{type_tag}{page_idx}-{safe_date}")
+                        g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
                         region_entry[future_key].append({"local": gal_filename, "future": g_future})
+                        
+                        img_counter += 1
+                        page_idx += 1
 
                         next_btn = page.locator(f'[aria-label*="{gallery_label}"] div[role="button"]:has(path[d*="m4.64.17"])').first
                         if next_btn.is_visible() and not next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true'"):
                             next_btn.click()
-                            page_idx += 1
                             page.wait_for_timeout(400)
                         else: break
                         if page_idx > 5: break
 
+                # Order of operations matches preview: Header -> Progress -> Charts -> Gallery
                 if region != "All Regions":
                     capture_paged_gallery("Tickets in Progress", "in_progress_futures")
+
+                # --- PART 2: CHARTS (Image N after Progress) ---
+                content_filename = f"{safe_region}-content.jpg"
+                page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
+                c_future = upload_executor.submit(background_upload, content_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
+                region_entry["c_future"] = c_future
+                region_entry["local_content"] = content_filename
+                img_counter += 1
+
+                if region != "All Regions":
                     capture_paged_gallery("Completed Ticket Gallery", "completed_futures")
 
                 captured_data.append(region_entry)
@@ -227,7 +233,6 @@ def capture_regional_images(target_url):
 
         browser.close()
 
-    # Finalize Data: Convert Futures to URLs
     final_data = []
     for item in captured_data:
         item["header_url"] = item.pop("h_future").result()["secure_url"]
@@ -249,8 +254,9 @@ def sync_to_airtable(data_list):
     for item in data_list:
         record_type = f"{item.get('header_id', 'Consolidated Report')} | {item['region']}"
         
-        record_attachments = [{"url": item["header_url"]}, {"url": item["content_url"]}]
+        record_attachments = [{"url": item["header_url"]}]
         for i_page in item.get("in_progress_pages", []): record_attachments.append({"url": i_page["url"]})
+        record_attachments.append({"url": item["content_url"]})
         for g_page in item.get("completed_gallery_pages", []): record_attachments.append({"url": g_page["url"]})
             
         fields = {
