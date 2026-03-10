@@ -160,23 +160,33 @@ def capture_regional_images(target_url):
                     while page_idx <= 10:
                         gal_rect = page.evaluate(f"""
                             (label) => {{
-                                // Use the exact h2 classes provided for precise matching
-                                const elements = Array.from(document.querySelectorAll('h2.font-family-default.heading-size-xsmall, h1, h3, div.font-weight-strong'));
-                                const header = elements.find(el => el.innerText && el.innerText.trim() === label);
+                                // Find specific header
+                                const headers = Array.from(document.querySelectorAll('h2.font-family-default.heading-size-xsmall'));
+                                const header = headers.find(el => el.innerText && el.innerText.trim() === label);
                                 if (!header) return null;
 
-                                const container = header.closest('[data-testid="gridRowSection"]') || 
-                                                  header.closest('[data-testid="page-element:gallery"]') ||
-                                                  header.parentElement.parentElement;
+                                const section = header.closest('[data-testid="gridRowSection"]');
+                                if (!section) return null;
+
+                                // Find the "Page X of Y" button inside this specific section
+                                const pageIndicator = section.querySelector('div[role="button"]:has(span:has-text("Page"))') || 
+                                                     section.querySelector('div.flex.items-center:has(span.mr-half:has-text("Page"))');
                                 
-                                if (!container) return null;
+                                const startY = header.getBoundingClientRect().top + window.scrollY;
+                                let endY;
+
+                                if (pageIndicator) {{
+                                    const pRect = pageIndicator.getBoundingClientRect();
+                                    endY = pRect.bottom + window.scrollY + 12; // 12px padding as requested
+                                }} else {{
+                                    endY = section.getBoundingClientRect().bottom + window.scrollY;
+                                }}
                                 
-                                const r = container.getBoundingClientRect();
                                 return {{ 
                                     x: 0, 
-                                    y: Math.floor(r.top + window.scrollY - 15), 
+                                    y: Math.floor(startY - 15), 
                                     width: 1920, 
-                                    height: Math.floor(r.height + 30) 
+                                    height: Math.floor(endY - startY + 15) 
                                 }};
                             }}
                         """, label_text)
@@ -186,16 +196,6 @@ def capture_regional_images(target_url):
                         
                         page.mouse.wheel(0, gal_rect['y'] - 200)
                         page.wait_for_timeout(500)
-
-                        gal_rect = page.evaluate(f"""
-                            (label) => {{
-                                const elements = Array.from(document.querySelectorAll('h2.font-family-default.heading-size-xsmall, h1, h3, div.font-weight-strong'));
-                                const header = elements.find(el => el.innerText && el.innerText.trim() === label);
-                                const container = header.closest('[data-testid="gridRowSection"]') || header.closest('[data-testid="page-element:gallery"]');
-                                const r = container.getBoundingClientRect();
-                                return {{ x: 0, y: Math.floor(r.top + window.scrollY - 10), width: 1920, height: Math.floor(r.height + 20) }};
-                            }}
-                        """, label_text)
 
                         fn = f"temp_{region_code}_gal_{img_counter}.jpg"
                         page.screenshot(path=fn, clip=gal_rect, type="jpeg", quality=90)
@@ -208,7 +208,8 @@ def capture_regional_images(target_url):
                         })
                         img_counter += 1
 
-                        next_btn = page.locator(f'div[data-testid="gridRowSection"]:has-text("{label_text}")') \
+                        # Locate pagination button
+                        next_btn = page.locator(f'div[data-testid="gridRowSection"]:has(h2:has-text("{label_text}"))') \
                                        .locator('div[role="button"]:has(svg), button:has(svg)') \
                                        .filter(has=page.locator('path[d*="m4.64.17"]')) \
                                        .last
@@ -310,6 +311,29 @@ def sync_to_airtable(data_list):
 
 # --- UI ---
 st.set_page_config(page_title="Airtable Report Capture", layout="wide")
+
+# Force CSS to remove all margins and paddings from Streamlit image containers
+st.markdown("""
+    <style>
+    [data-testid="stImage"] {
+        margin-bottom: 0px !important;
+        padding-bottom: 0px !important;
+    }
+    [data-testid="stImage"] img {
+        display: block;
+        margin-bottom: 0px !important;
+    }
+    div.block-container {
+        padding-top: 2rem;
+    }
+    .seamless-stack img {
+        margin-bottom: 0 !important;
+        padding-bottom: 0 !important;
+        display: block !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("🗺️ Bi-Weekly Report Capture")
 
 if 'capture_results' not in st.session_state:
@@ -335,12 +359,8 @@ if st.session_state.capture_results:
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
             st.subheader(item['region'])
-            # Create a "seamless" vertical stack using HTML/CSS
-            # This removes the gaps between st.image elements
-            st.markdown('<div style="display: flex; flex-direction: column;">', unsafe_allow_html=True)
+            # We use a custom class to target the stack with CSS
+            st.markdown('<div class="seamless-stack">', unsafe_allow_html=True)
             for img in item["images"]:
-                # Using st.image but wrapped in a div with no bottom margin
                 st.image(img['local'], use_container_width=True)
-                # Adding a small hack to ensure no streamlit spacing
-                st.markdown('<div style="margin-top: -15px;"></div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
