@@ -84,17 +84,15 @@ def capture_regional_images(target_url):
             }
         """)
 
-        # Extracting the Week ID for the filename (Everything before the "I")
+        # Extracting the Week ID for the filename
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
             raw_text = header_locator.inner_text(timeout=3000)
             
-            # Logic: Split by "I" and take the first part (e.g., "W1-2")
             if "I" in raw_text:
                 week_id = raw_text.split("I")[0].strip()
                 header_title_clean = raw_text.strip()
-            # Fallback for the pipe character just in case
             elif "|" in raw_text:
                 week_id = raw_text.split("|")[0].strip()
                 header_title_clean = raw_text.strip()
@@ -160,7 +158,7 @@ def capture_regional_images(target_url):
                 safe_date = capture_date.replace('-', '')
                 filename_week = week_id.replace(" ", "-")
 
-                # --- PART 1: HEADER (Always Image 1) ---
+                # HEADER
                 header_filename = f"{safe_region}-header.jpg"
                 page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=85)
                 h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
@@ -172,6 +170,7 @@ def capture_regional_images(target_url):
                     "date": capture_date,
                     "header_id": header_title_clean,
                     "local_header": header_filename,
+                    "source_url": target_url,  # Store the user's input URL
                     "in_progress_futures": [],
                     "completed_futures": [] 
                 }
@@ -210,11 +209,10 @@ def capture_regional_images(target_url):
                         else: break
                         if page_idx > 5: break
 
-                # Order of operations matches preview: Header -> Progress -> Charts -> Gallery
                 if region != "All Regions":
                     capture_paged_gallery("Tickets in Progress", "in_progress_futures")
 
-                # --- PART 2: CHARTS (Image N after Progress) ---
+                # CHARTS
                 content_filename = f"{safe_region}-content.jpg"
                 page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
                 c_future = upload_executor.submit(background_upload, content_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
@@ -244,7 +242,7 @@ def capture_regional_images(target_url):
     return final_data
 
 def sync_to_airtable(data_list):
-    """Sends captured data and Cloudinary links to the Airtable base."""
+    """Sends captured data, Cloudinary links, and original URL to the Airtable base."""
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
     
@@ -260,8 +258,12 @@ def sync_to_airtable(data_list):
         for g_page in item.get("completed_gallery_pages", []): record_attachments.append({"url": g_page["url"]})
             
         fields = {
-            "Type": record_type, "Date": item["date"], "Attachments": record_attachments,
-            "Header": item["header_url"], "Charts": item["content_url"]
+            "Type": record_type, 
+            "Date": item["date"], 
+            "URL": item["source_url"],  # Map the source URL to the "URL" field
+            "Attachments": record_attachments,
+            "Header": item["header_url"], 
+            "Charts": item["content_url"]
         }
         
         for i, p in enumerate(item.get("completed_gallery_pages", []), 1):
