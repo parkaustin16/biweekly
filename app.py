@@ -21,6 +21,7 @@ def install_browser_binaries():
 install_browser_binaries()
 
 # --- 2. CONFIGURATION ---
+# Assumes these are set in .streamlit/secrets.toml
 cloudinary.config(
     cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
     api_key = st.secrets["CLOUDINARY_API_KEY"],
@@ -34,7 +35,7 @@ upload_executor = ThreadPoolExecutor(max_workers=5)
 
 @st.cache_data(show_spinner=False)
 def get_base64_image(image_path):
-    """Helper to convert local image to base64 for inline HTML rendering with caching."""
+    """Helper to convert local image to base64 for inline HTML rendering."""
     if not os.path.exists(image_path):
         return ""
     with open(image_path, "rb") as img_file:
@@ -65,10 +66,9 @@ def capture_regional_images(target_url):
         page.goto(target_url, wait_until="commit")
         page.wait_for_selector('div[role="tab"]', timeout=15000)
         
-        # Update status once connected
         connection_status.success("✅ Connected to Airtable Interface")
         
-        # --- CLEANUP UI ELEMENTS ---
+        # UI Cleanup
         page.evaluate("""
             () => {
                 const removeSelectors = [
@@ -84,7 +84,7 @@ def capture_regional_images(target_url):
             }
         """)
 
-        # Extracting the Week ID for the filename
+        # Extract Week ID
         try:
             header_selector = 'h2.font-family-display-updated, h1, .interfaceTitle'
             header_locator = page.locator(header_selector).first
@@ -104,14 +104,20 @@ def capture_regional_images(target_url):
 
         for region in regions:
             status_placeholder = st.empty()
-            status_placeholder.write(f"🔄 **{region}**: Capturing...")
+            status_placeholder.write(f"🔄 **{region}**: Navigating and Capturing...")
             img_counter = 1
             
             try:
+                # 1. Click the tab
                 tab = page.locator(f'div[role="tab"]:has-text("{region}")')
                 tab.click()
+                
+                # 2. Wait for content to load
                 page.wait_for_function("() => document.querySelector('.loading-spinner') === null")
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(800) # Slight buffer for URL state to update
+
+                # --- NEW: CAPTURE SPECIFIC TAB URL ---
+                specific_tab_url = page.url 
 
                 layout_info = page.evaluate("""
                     () => {
@@ -170,7 +176,7 @@ def capture_regional_images(target_url):
                     "date": capture_date,
                     "header_id": header_title_clean,
                     "local_header": header_filename,
-                    "source_url": target_url,  # Store the user's input URL
+                    "tab_url": specific_tab_url, # Store the specific tab URL here
                     "in_progress_futures": [],
                     "completed_futures": [] 
                 }
@@ -242,7 +248,7 @@ def capture_regional_images(target_url):
     return final_data
 
 def sync_to_airtable(data_list):
-    """Sends captured data, Cloudinary links, and original URL to the Airtable base."""
+    """Sends captured data, specific deep-links, and Cloudinary links to Airtable."""
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{st.secrets['TABLE_NAME']}"
     headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
     
@@ -260,7 +266,7 @@ def sync_to_airtable(data_list):
         fields = {
             "Type": record_type, 
             "Date": item["date"], 
-            "URL": item["source_url"],  # Map the source URL to the "URL" field
+            "URL": item["tab_url"],  # Map the specific deep-link URL here
             "Attachments": record_attachments,
             "Header": item["header_url"], 
             "Charts": item["content_url"]
@@ -324,6 +330,8 @@ if st.session_state.capture_results:
     for idx, item in enumerate(st.session_state.capture_results):
         with cols[idx]:
             st.subheader(item['region'])
+            # Display link for verification
+            st.caption(f"[Direct Tab Link]({item['tab_url']})")
             html_parts = [f'<div class="preview-container" id="container-{idx}">']
             html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_header"])}" />')
             for g in item.get("in_progress_pages", []):
