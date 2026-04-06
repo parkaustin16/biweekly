@@ -199,7 +199,8 @@ def capture_regional_images(target_url):
                         page.mouse.wheel(0, gal_info['y'] - 100)
                         page.wait_for_timeout(300) 
 
-                        gal_filename = f"{safe_region}-gal-{page_idx}.jpg"
+                        gal_prefix = "prog" if future_key == "in_progress_futures" else "comp"
+                        gal_filename = f"{safe_region}-{gal_prefix}-{page_idx}.jpg"
                         page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
                         
                         g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
