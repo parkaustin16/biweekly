@@ -334,10 +334,10 @@ if st.session_state.capture_results:
             st.caption(f"[Direct Tab Link]({item['tab_url']})")
             html_parts = [f'<div class="preview-container" id="container-{idx}">']
             html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_header"])}" />')
-            for g in item.get("in_progress_pages", []):
-                html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
             html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_content"])}" />')
             for g in item.get("completed_gallery_pages", []):
+                html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
+            for g in item.get("in_progress_pages", []):
                 html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
             html_parts.append('</div>')
             st.markdown("".join(html_parts), unsafe_allow_html=True)
