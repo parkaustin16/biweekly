@@ -216,8 +216,7 @@ def capture_regional_images(target_url):
                         else: break
                         if page_idx > 5: break
 
-                if region != "All Regions":
-                    capture_paged_gallery("Tickets in Progress", "in_progress_futures")
+                capture_paged_gallery("Tickets in Progress", "in_progress_futures")
 
                 # CHARTS
                 content_filename = f"{safe_region}-content.jpg"
@@ -227,8 +226,7 @@ def capture_regional_images(target_url):
                 region_entry["local_content"] = content_filename
                 img_counter += 1
 
-                if region != "All Regions":
-                    capture_paged_gallery("Completed Ticket Gallery", "completed_futures")
+                capture_paged_gallery("Completed Ticket Gallery", "completed_futures")
 
                 captured_data.append(region_entry)
                 status_placeholder.write(f"✅ **{region}** captured")
