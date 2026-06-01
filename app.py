@@ -305,52 +305,64 @@ def capture_creativehub_reports():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        # Use a very tall viewport so all content (including lazy images) is
+        # in-view on load — no overflow/height manipulation needed.
         context = browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
+            viewport={'width': 1920, 'height': 15000},
             device_scale_factor=2
         )
-        page = context.new_page()
 
         conn_status = st.empty()
         conn_status.info("🔗 Connecting to CreativeHub Reports...")
-        page.goto(CREATIVEHUB_URL, wait_until="domcontentloaded", timeout=30000)
+
+        # ── First page: handle password gate and establish session cookies ──
+        seed_page = context.new_page()
+        seed_page.goto(CREATIVEHUB_URL, wait_until="domcontentloaded", timeout=30000)
         try:
-            page.wait_for_load_state("networkidle", timeout=10000)
+            seed_page.wait_for_load_state("networkidle", timeout=10000)
         except Exception:
             pass
 
-        # Handle password gate if present
-        pwd_input = page.locator('input[type="password"]')
-        if pwd_input.is_visible(timeout=3000):
-            pwd_input.fill("123098")
-            page.keyboard.press("Enter")
-            try:
-                page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:
-                pass
-            page.wait_for_timeout(500)
+        try:
+            pwd_input = seed_page.locator('input[type="password"]')
+            if pwd_input.is_visible(timeout=3000):
+                pwd_input.fill("123098")
+                seed_page.keyboard.press("Enter")
+                try:
+                    seed_page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+                seed_page.wait_for_timeout(500)
+        except Exception:
+            pass
 
+        seed_page.close()
         conn_status.success("✅ Connected to CreativeHub Reports")
 
         for tab_name in CREATIVEHUB_TABS:
             tab_status = st.empty()
             tab_status.write(f"🔄 **{tab_name}**: Capturing...")
             try:
-                # Search only interactive/clickable elements for the tab name.
-                # If multiple match (e.g. nav tab + gallery badge), pick the
-                # topmost one by y-position — nav tabs are always near the top.
+                # ── Open a fresh page per tab — avoids SPA state corruption ──
+                page = context.new_page()
+                page.goto(CREATIVEHUB_URL, wait_until="domcontentloaded", timeout=30000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(600)
+
+                # ── Click the correct tab ─────────────────────────────────────
                 click_result = page.evaluate(f"""
                     () => {{
                         const tabName = '{tab_name}';
                         const candidates = Array.from(document.querySelectorAll(
                             '[role="tab"], a, button, li'
                         ));
-                        // Exact match first (trim both sides)
                         let matches = candidates.filter(el => {{
                             const t = (el.innerText || el.textContent || '').trim();
                             return t === tabName;
                         }});
-                        // Fall back to startsWith match (handles "All (3)" style labels)
                         if (matches.length === 0) {{
                             matches = candidates.filter(el => {{
                                 const t = (el.innerText || el.textContent || '').trim();
@@ -363,13 +375,11 @@ def capture_creativehub_reports():
                                 .join('|');
                             return 'not_found:' + sample;
                         }}
-                        // Only keep visible elements
                         const visible = matches.filter(el => {{
                             const r = el.getBoundingClientRect();
                             return r.width > 0 && r.height > 0;
                         }});
                         const pool = visible.length > 0 ? visible : matches;
-                        // Sort by y-position ascending — nav tab is topmost
                         pool.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
                         const best = pool[0];
                         best.click();
@@ -384,50 +394,15 @@ def capture_creativehub_reports():
                     page.wait_for_load_state("networkidle", timeout=8000)
                 except Exception:
                     pass
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(1000)
 
                 tab_url = page.url
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # ── Expand the true scrollable container ──────────────────────
-                # SPAs often put content in an inner div with overflow-y:auto /
-                # overflow-y:scroll rather than letting body scroll. We find that
-                # container, scroll it to load lazy content, then remove its height
-                # constraint so body.scrollHeight reflects the full content.
-                page.evaluate("""() => {
-                    // 1. Find all inner scrollable containers (skip html/body)
-                    const scrollers = Array.from(document.querySelectorAll('*')).filter(el => {
-                        if (el === document.body || el === document.documentElement) return false;
-                        const s = window.getComputedStyle(el);
-                        return (s.overflowY === 'scroll' || s.overflowY === 'auto')
-                            && el.scrollHeight > el.clientHeight + 50;
-                    });
-
-                    // 2. Scroll each container to bottom then back to trigger lazy loads
-                    scrollers.forEach(el => {
-                        el.scrollTop = el.scrollHeight;
-                    });
-
-                    // 3. Expand them: remove height cap and overflow clipping
-                    scrollers.forEach(el => {
-                        el.style.overflow = 'visible';
-                        el.style.overflowY = 'visible';
-                        el.style.height = 'auto';
-                        el.style.maxHeight = 'none';
-                    });
-
-                    // 4. Expand body/html too
-                    document.body.style.overflow = 'visible';
-                    document.body.style.height = 'auto';
-                    document.body.style.maxHeight = 'none';
-                    document.documentElement.style.overflow = 'visible';
-                    document.documentElement.style.height = 'auto';
-                    document.documentElement.style.maxHeight = 'none';
-                }""")
-                page.wait_for_timeout(600)
-
-                # ── Force lazy images eager ────────────────────────────────────
+                # ── Force all lazy images to load ─────────────────────────────
+                # With a 15000px tall viewport everything is "in view", so most
+                # lazy images load automatically. This catches any stragglers.
                 page.evaluate("""() => {
                     document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
                         img.loading = 'eager';
@@ -435,41 +410,10 @@ def capture_creativehub_reports():
                         if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
                     });
                 }""")
-
-                # ── Scroll window to trigger any window-scroll lazy loaders ───
-                total_height = page.evaluate("document.body.scrollHeight")
-                pos = 0
-                while pos < total_height:
-                    page.evaluate(f"window.scrollTo(0, {pos})")
-                    page.wait_for_timeout(120)
-                    pos += 600
-                    total_height = page.evaluate("document.body.scrollHeight")
-                page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(500)
-
-                # ── Resize viewport to full content height ────────────────────
-                full_height = page.evaluate("""() => Math.max(
-                    document.body.scrollHeight,
-                    document.body.offsetHeight,
-                    document.documentElement.scrollHeight,
-                    document.documentElement.offsetHeight
-                )""")
-                page.set_viewport_size({'width': 1920, 'height': min(int(full_height) + 300, 20000)})
-                page.wait_for_timeout(600)
-
-                # ── Second lazy pass now that viewport is taller ───────────────
-                page.evaluate("""() => {
-                    document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
-                        img.loading = 'eager';
-                        if (img.dataset.src) img.src = img.dataset.src;
-                    });
-                }""")
-                page.wait_for_timeout(500)
-
-                page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(200)
+                page.wait_for_timeout(800)
 
                 page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
+                page.close()
 
                 future = upload_executor.submit(
                     background_upload, filename,
