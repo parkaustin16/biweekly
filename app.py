@@ -336,29 +336,33 @@ def capture_creativehub_reports():
             tab_status = st.empty()
             tab_status.write(f"🔄 **{tab_name}**: Capturing...")
             try:
-                # JS click scoped only to nav/tab elements — avoids matching
-                # region badge labels that appear inside gallery card content
+                # Find all elements whose trimmed text exactly matches the tab name,
+                # then sort by vertical position and click the topmost one.
+                # Nav tabs are always near the top of the page; gallery region badges
+                # are further down in the content area.
                 click_result = page.evaluate(f"""
                     () => {{
-                        const navScopes = [
-                            '[role="tab"]',
-                            'nav a', 'nav button', 'nav li',
-                            'header a', 'header button',
-                            '[class*="tab"] > a', '[class*="tab"] > button',
-                            '[class*="nav"] > a', '[class*="nav"] > button'
-                        ];
-                        for (const sel of navScopes) {{
-                            const els = Array.from(document.querySelectorAll(sel));
-                            const exact = els.find(el => el.textContent.trim() === '{tab_name}');
-                            if (exact) {{ exact.click(); return 'exact:' + sel + ':' + exact.textContent.trim(); }}
+                        const tabName = '{tab_name}';
+                        const all = Array.from(document.querySelectorAll('*'));
+                        const matches = all.filter(el => {{
+                            if (el.textContent.trim() !== tabName) return false;
+                            const r = el.getBoundingClientRect();
+                            return r.width > 0 && r.height > 0;
+                        }});
+                        if (matches.length === 0) {{
+                            const sample = all
+                                .filter(el => el.getBoundingClientRect().width > 0)
+                                .slice(0, 30)
+                                .map(el => el.textContent.trim().slice(0, 20))
+                                .join('|');
+                            return 'not_found:' + sample;
                         }}
-                        for (const sel of navScopes) {{
-                            const els = Array.from(document.querySelectorAll(sel));
-                            const fuzzy = els.find(el => el.textContent.trim().includes('{tab_name}'));
-                            if (fuzzy) {{ fuzzy.click(); return 'fuzzy:' + sel + ':' + fuzzy.textContent.trim(); }}
-                        }}
-                        const allTabs = Array.from(document.querySelectorAll('[role="tab"]'));
-                        return 'not_found:' + allTabs.map(t => t.textContent.trim()).join('|');
+                        // Sort ascending by top position — nav tab will be topmost
+                        matches.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+                        const best = matches[0];
+                        best.click();
+                        const r = best.getBoundingClientRect();
+                        return 'clicked:' + best.tagName + ':y=' + Math.round(r.top) + ':' + best.textContent.trim();
                     }}
                 """)
                 if click_result.startswith('not_found:'):
