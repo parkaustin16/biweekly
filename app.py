@@ -31,6 +31,9 @@ cloudinary.config(
 
 upload_executor = ThreadPoolExecutor(max_workers=5)
 
+CREATIVEHUB_URL = "https://lge-d2c.com/creativehub/reports"
+CREATIVEHUB_TABS = ["All", "Asia", "Canada", "Europe", "LATAM", "MEA"]
+
 # --- 3. CORE LOGIC ---
 
 @st.cache_data(show_spinner=False)
@@ -62,9 +65,23 @@ def capture_regional_images(target_url):
         
         connection_status = st.empty()
         connection_status.info("🔗 Connecting to Airtable Interface...")
-        
-        page.goto(target_url, wait_until="commit")
-        page.wait_for_selector('div[role="tab"]', timeout=15000)
+
+        page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+        # Give the Airtable React app time to hydrate before looking for tabs
+        try:
+            page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass  # networkidle may never fire on SPAs; proceed anyway
+        try:
+            page.wait_for_selector('div[role="tab"]', timeout=30000)
+        except Exception as tab_err:
+            debug_path = "debug-no-tabs.jpg"
+            page.screenshot(path=debug_path, full_page=True, type="jpeg", quality=80)
+            debug_b64 = get_base64_image(debug_path)
+            st.error(f"Could not find tabs on the page. Page snapshot below.")
+            st.markdown(f'<img src="data:image/jpeg;base64,{debug_b64}" style="width:100%"/>', unsafe_allow_html=True)
+            browser.close()
+            return []
         
         connection_status.success("✅ Connected to Airtable Interface")
         
@@ -288,6 +305,116 @@ def sync_to_airtable(data_list):
     
     st.session_state.capture_results = None
 
+def capture_creativehub_reports():
+    """Captures a full-page screenshot for each tab on the CreativeHub Reports site."""
+    captured_data = []
+    capture_date = datetime.now().strftime("%Y-%m-%d")
+    safe_date = capture_date.replace('-', '')
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            device_scale_factor=2
+        )
+        page = context.new_page()
+
+        conn_status = st.empty()
+        conn_status.info("🔗 Connecting to CreativeHub Reports...")
+        page.goto(CREATIVEHUB_URL, wait_until="domcontentloaded", timeout=30000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+
+        # Handle password gate if present
+        pwd_input = page.locator('input[type="password"]')
+        if pwd_input.is_visible(timeout=3000):
+            pwd_input.fill("123098")
+            page.keyboard.press("Enter")
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            page.wait_for_timeout(500)
+
+        conn_status.success("✅ Connected to CreativeHub Reports")
+
+        for tab_name in CREATIVEHUB_TABS:
+            tab_status = st.empty()
+            tab_status.write(f"🔄 **{tab_name}**: Capturing...")
+            try:
+                tab_locator = page.locator(
+                    f'[role="tab"]:has-text("{tab_name}")'
+                ).or_(page.locator(f'a:has-text("{tab_name}")'))
+                tab_locator.first.click()
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(500)
+
+                tab_url = page.url
+                safe_tab = tab_name.replace(' ', '-')
+                filename = f"ch-{safe_tab}-{safe_date}.jpg"
+
+                page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
+
+                future = upload_executor.submit(
+                    background_upload, filename,
+                    f"creativehub-{safe_tab}-{safe_date}"
+                )
+                captured_data.append({
+                    "tab": tab_name,
+                    "date": capture_date,
+                    "tab_url": tab_url,
+                    "local": filename,
+                    "future": future,
+                })
+                tab_status.write(f"✅ **{tab_name}** captured")
+            except Exception as e:
+                st.error(f"Error on {tab_name}: {e}")
+
+        browser.close()
+
+    final_data = []
+    for item in captured_data:
+        item["url"] = item.pop("future").result()["secure_url"]
+        final_data.append(item)
+
+    return final_data
+
+
+def sync_creativehub_to_airtable(data_list):
+    """Sends CreativeHub full-page captures to Airtable."""
+    table_name = st.secrets.get("CH_TABLE_NAME", st.secrets["TABLE_NAME"])
+    url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{table_name}"
+    headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
+
+    if not data_list:
+        return None
+
+    records_to_create = []
+    for item in data_list:
+        fields = {
+            "Type": f"CreativeHub Reports | {item['tab']}",
+            "Date": item["date"],
+            "URL": item["tab_url"],
+            "Attachments": [{"url": item["url"]}],
+            "Header": item["url"],
+        }
+        records_to_create.append({"fields": fields})
+
+    for i in range(0, len(records_to_create), 10):
+        chunk = records_to_create[i:i+10]
+        response = requests.post(url, headers=headers, json={"records": chunk})
+        if response.status_code == 200:
+            st.success(f"🎉 Created records {i+1} to {min(i+10, len(records_to_create))}")
+        else:
+            st.error(f"❌ Sync Error: {response.text}")
+
+    st.session_state.ch_results = None
+
 # --- 4. USER INTERFACE ---
 
 st.set_page_config(page_title="Airtable Report Capture", layout="wide")
@@ -308,6 +435,8 @@ st.markdown("""
 
 if 'capture_results' not in st.session_state:
     st.session_state.capture_results = None
+if 'ch_results' not in st.session_state:
+    st.session_state.ch_results = None
 
 url_input = st.text_input("Airtable Interface URL", placeholder="https://airtable.com/app...")
 
@@ -338,5 +467,31 @@ if st.session_state.capture_results:
                 html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
             for g in item.get("in_progress_pages", []):
                 html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
+            html_parts.append('</div>')
+            st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+# --- CREATIVEHUB REPORTS ---
+st.divider()
+st.subheader("📊 CreativeHub Reports")
+st.caption(f"Full-page capture per tab from [{CREATIVEHUB_URL}]({CREATIVEHUB_URL})")
+
+ch_col1, ch_col2 = st.columns([1, 4])
+with ch_col1:
+    if st.button("🚀 Run CreativeHub Capture"):
+        st.session_state.ch_results = capture_creativehub_reports()
+with ch_col2:
+    if st.session_state.ch_results:
+        if st.button("📤 Upload CreativeHub to Airtable", type="primary"):
+            sync_creativehub_to_airtable(st.session_state.ch_results)
+
+if st.session_state.ch_results:
+    st.divider()
+    ch_cols = st.columns(len(st.session_state.ch_results))
+    for idx, item in enumerate(st.session_state.ch_results):
+        with ch_cols[idx]:
+            st.subheader(item['tab'])
+            st.caption(f"[Tab Link]({item['tab_url']})")
+            html_parts = [f'<div class="preview-container" id="ch-container-{idx}">']
+            html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local"])}" />')
             html_parts.append('</div>')
             st.markdown("".join(html_parts), unsafe_allow_html=True)
