@@ -130,72 +130,36 @@ def capture_regional_images(target_url):
                 tab.click()
                 
                 # 2. Wait for content to load
-                page.wait_for_function("() => document.querySelector('.loading-spinner') === null")
+                try:
+                    page.wait_for_function("() => document.querySelector('.loading-spinner') === null", timeout=5000)
+                except Exception:
+                    pass
                 page.wait_for_timeout(800) # Slight buffer for URL state to update
 
                 # --- NEW: CAPTURE SPECIFIC TAB URL ---
                 specific_tab_url = page.url 
 
-                layout_info = page.evaluate("""
-                    () => {
-                        const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
-                        const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.closest('[data-testid="gridRowSection"]');
-                        const chartsSection = document.querySelector('[data-testid="page-element:chart"]')?.closest('[data-testid="gridRowSection"]');
-
-                        const getRect = (el) => {
-                            if (!el) return null;
-                            const r = el.getBoundingClientRect();
-                            return { x: r.left, y: r.top + window.scrollY, width: r.width, height: r.height };
-                        };
-
-                        const titleRect = getRect(titleEl);
-                        const metricsRect = getRect(metricsGrid);
-                        const chartsRect = getRect(chartsSection);
-
-                        const startY = titleRect ? titleRect.y : 0;
-                        const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
-                        
-                        const headerClip = {
-                            x: 0, y: Math.floor(startY), width: 1920, height: Math.floor(metricsBottom - startY)
-                        };
-
-                        let contentClip = null;
-                        if (chartsRect) {
-                            const charts = chartsSection.querySelectorAll('[data-testid="page-element:chart"]');
-                            let maxBottom = chartsRect.y + chartsRect.height;
-                            if (charts.length > 0) {
-                                const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
-                                maxBottom = Math.max(...bottoms) + 27; 
-                            }
-                            contentClip = {
-                                x: 0, y: Math.floor(chartsRect.y - 10), width: 1920, height: Math.floor(maxBottom - chartsRect.y)
-                            };
-                        } else {
-                            contentClip = { x: 0, y: 650, width: 1920, height: 1000 };
-                        }
-                        return { headerClip, contentClip };
-                    }
-                """)
-
                 safe_region = region.replace(' ', '-')
                 safe_date = capture_date.replace('-', '')
                 filename_week = week_id.replace(" ", "-")
 
-                # HEADER
-                header_filename = f"{safe_region}-header.jpg"
-                page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=85)
-                h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
+                # FULL PAGE SCREENSHOT
+                full_filename = f"{safe_region}-full.jpg"
+                page.screenshot(path=full_filename, full_page=True, type="jpeg", quality=85)
+                h_future = upload_executor.submit(background_upload, full_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
                 img_counter += 1
 
                 region_entry = {
                     "region": region,
                     "h_future": h_future,
+                    "c_future": h_future,
                     "date": capture_date,
                     "header_id": header_title_clean,
-                    "local_header": header_filename,
-                    "tab_url": specific_tab_url, # Store the specific tab URL here
+                    "local_header": full_filename,
+                    "local_content": full_filename,
+                    "tab_url": specific_tab_url,
                     "in_progress_futures": [],
-                    "completed_futures": [] 
+                    "completed_futures": []
                 }
 
                 def capture_paged_gallery(gallery_label, future_key):
@@ -212,17 +176,17 @@ def capture_regional_images(target_url):
                             }}
                         """)
                         if not gal_info: break
-                        
+
                         page.mouse.wheel(0, gal_info['y'] - 100)
-                        page.wait_for_timeout(300) 
+                        page.wait_for_timeout(300)
 
                         gal_prefix = "prog" if future_key == "in_progress_futures" else "comp"
                         gal_filename = f"{safe_region}-{gal_prefix}-{page_idx}.jpg"
                         page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
-                        
+
                         g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
                         region_entry[future_key].append({"local": gal_filename, "future": g_future})
-                        
+
                         img_counter += 1
                         page_idx += 1
 
@@ -234,15 +198,6 @@ def capture_regional_images(target_url):
                         if page_idx > 5: break
 
                 capture_paged_gallery("Tickets in Progress", "in_progress_futures")
-
-                # CHARTS
-                content_filename = f"{safe_region}-content.jpg"
-                page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
-                c_future = upload_executor.submit(background_upload, content_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
-                region_entry["c_future"] = c_future
-                region_entry["local_content"] = content_filename
-                img_counter += 1
-
                 capture_paged_gallery("Completed Ticket Gallery", "completed_futures")
 
                 captured_data.append(region_entry)
@@ -462,7 +417,8 @@ if st.session_state.capture_results:
             st.caption(f"[Direct Tab Link]({item['tab_url']})")
             html_parts = [f'<div class="preview-container" id="container-{idx}">']
             html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_header"])}" />')
-            html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_content"])}" />')
+            if item.get("local_content") and item["local_content"] != item["local_header"]:
+                html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local_content"])}" />')
             for g in item.get("completed_gallery_pages", []):
                 html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(g["local"])}" />')
             for g in item.get("in_progress_pages", []):
