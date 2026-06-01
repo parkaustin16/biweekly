@@ -156,30 +156,29 @@ def capture_regional_images(target_url):
                 safe_date = capture_date.replace('-', '')
                 filename_week = week_id.replace(" ", "-")
 
-                # Expand Airtable's overflow-hidden containers and measure true content height
-                content_height = page.evaluate("""
+                # Force lazy images to load, scroll to trigger remaining content
+                page.evaluate("""
                     () => {
-                        [document.documentElement, document.body].forEach(el => {
-                            el.style.height = 'auto';
-                            el.style.overflow = 'visible';
+                        document.querySelectorAll('img[loading="lazy"]').forEach(img => {
+                            img.loading = 'eager';
+                            if (img.dataset.src) img.src = img.dataset.src;
                         });
-                        document.querySelectorAll(
-                            '[data-testid="interface-page-content"], [class*="scrollLayer"], ' +
-                            '[class*="scrollContainer"], [class*="pageContent"], [class*="interfaceContent"]'
-                        ).forEach(el => {
-                            el.style.height = 'auto';
-                            el.style.maxHeight = 'none';
-                            el.style.overflow = 'visible';
-                        });
-                        return Math.max(
-                            document.body.scrollHeight,
-                            document.documentElement.scrollHeight,
-                            1080
-                        );
                     }
                 """)
-                page.set_viewport_size({'width': 1920, 'height': min(int(content_height) + 400, 15000)})
-                page.wait_for_timeout(400)
+                total_height = page.evaluate("document.body.scrollHeight")
+                pos = 0
+                while pos < total_height:
+                    page.evaluate(f"window.scrollTo(0, {pos})")
+                    page.wait_for_timeout(120)
+                    pos += 800
+                    total_height = page.evaluate("document.body.scrollHeight")
+                page.evaluate("window.scrollTo(0, 0)")
+                page.wait_for_timeout(500)
+
+                # Resize viewport to full content height before screenshotting
+                full_height = page.evaluate("document.body.scrollHeight")
+                page.set_viewport_size({'width': 1920, 'height': min(full_height + 100, 20000)})
+                page.wait_for_timeout(300)
 
                 # FULL PAGE SCREENSHOT
                 full_filename = f"{safe_region}-full.jpg"
