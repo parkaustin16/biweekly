@@ -336,18 +336,29 @@ def capture_creativehub_reports():
             tab_status = st.empty()
             tab_status.write(f"🔄 **{tab_name}**: Capturing...")
             try:
-                # JS click to bypass actionability/timeout issues
+                # JS click scoped only to nav/tab elements — avoids matching
+                # region badge labels that appear inside gallery card content
                 click_result = page.evaluate(f"""
                     () => {{
-                        const candidates = [
-                            ...document.querySelectorAll('[role="tab"]'),
-                            ...document.querySelectorAll('a, button, li')
+                        const navScopes = [
+                            '[role="tab"]',
+                            'nav a', 'nav button', 'nav li',
+                            'header a', 'header button',
+                            '[class*="tab"] > a', '[class*="tab"] > button',
+                            '[class*="nav"] > a', '[class*="nav"] > button'
                         ];
-                        const exact = candidates.find(el => el.textContent.trim() === '{tab_name}');
-                        if (exact) {{ exact.click(); return 'exact:' + exact.textContent.trim(); }}
-                        const fuzzy = candidates.find(el => el.textContent.trim().includes('{tab_name}'));
-                        if (fuzzy) {{ fuzzy.click(); return 'fuzzy:' + fuzzy.textContent.trim(); }}
-                        return 'not_found:' + candidates.slice(0,20).map(e=>e.textContent.trim()).join('|');
+                        for (const sel of navScopes) {{
+                            const els = Array.from(document.querySelectorAll(sel));
+                            const exact = els.find(el => el.textContent.trim() === '{tab_name}');
+                            if (exact) {{ exact.click(); return 'exact:' + sel + ':' + exact.textContent.trim(); }}
+                        }}
+                        for (const sel of navScopes) {{
+                            const els = Array.from(document.querySelectorAll(sel));
+                            const fuzzy = els.find(el => el.textContent.trim().includes('{tab_name}'));
+                            if (fuzzy) {{ fuzzy.click(); return 'fuzzy:' + sel + ':' + fuzzy.textContent.trim(); }}
+                        }}
+                        const allTabs = Array.from(document.querySelectorAll('[role="tab"]'));
+                        return 'not_found:' + allTabs.map(t => t.textContent.trim()).join('|');
                     }}
                 """)
                 if click_result.startswith('not_found:'):
