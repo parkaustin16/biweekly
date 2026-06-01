@@ -378,31 +378,57 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # Force all lazy images to load, then set viewport to full scroll height
-                page.evaluate("""
-                    () => {
-                        document.querySelectorAll('img[loading="lazy"]').forEach(img => {
-                            img.loading = 'eager';
-                            if (img.dataset.src) img.src = img.dataset.src;
-                        });
-                    }
-                """)
-                # Scroll down in steps to trigger any remaining lazy content
-                total_height = page.evaluate("document.body.scrollHeight")
-                step = 800
+                # Force all lazy images to load
+                def force_lazy(p):
+                    p.evaluate("""
+                        () => {
+                            document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
+                                img.loading = 'eager';
+                                if (img.dataset.src) img.src = img.dataset.src;
+                                if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
+                            });
+                        }
+                    """)
+                force_lazy(page)
+
+                # Scroll down in steps to trigger any scroll-based lazy loaders
+                get_height = "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+                total_height = page.evaluate(get_height)
+                step = 600
                 pos = 0
                 while pos < total_height:
                     page.evaluate(f"window.scrollTo(0, {pos})")
-                    page.wait_for_timeout(120)
+                    page.wait_for_timeout(150)
                     pos += step
-                    total_height = page.evaluate("document.body.scrollHeight")
+                    total_height = page.evaluate(get_height)
                 page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(600)
 
-                # Resize viewport to actual full content height so screenshot is complete
-                full_height = page.evaluate("document.body.scrollHeight")
-                page.set_viewport_size({'width': 1920, 'height': min(full_height + 100, 20000)})
-                page.wait_for_timeout(300)
+                # First viewport resize
+                full_height = page.evaluate(get_height)
+                page.set_viewport_size({'width': 1920, 'height': min(full_height + 200, 20000)})
+                page.wait_for_timeout(600)
+
+                # Second lazy-load pass now that viewport is expanded (reveals more images)
+                force_lazy(page)
+                page.wait_for_timeout(600)
+
+                # Do a second scroll pass in case expansion revealed more content
+                total_height2 = page.evaluate(get_height)
+                pos = 0
+                while pos < total_height2:
+                    page.evaluate(f"window.scrollTo(0, {pos})")
+                    page.wait_for_timeout(100)
+                    pos += step
+                    total_height2 = page.evaluate(get_height)
+                page.evaluate("window.scrollTo(0, 0)")
+                page.wait_for_timeout(400)
+
+                # Final height check — resize again if content grew
+                final_height = page.evaluate(get_height)
+                if final_height > full_height:
+                    page.set_viewport_size({'width': 1920, 'height': min(final_height + 200, 20000)})
+                    page.wait_for_timeout(400)
 
                 page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
 
