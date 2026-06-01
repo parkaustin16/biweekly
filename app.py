@@ -305,54 +305,42 @@ def capture_creativehub_reports():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Use a very tall viewport so all content (including lazy images) is
-        # in-view on load — no overflow/height manipulation needed.
         context = browser.new_context(
             viewport={'width': 1920, 'height': 15000},
             device_scale_factor=2
         )
+        page = context.new_page()
 
         conn_status = st.empty()
         conn_status.info("🔗 Connecting to CreativeHub Reports...")
-
-        # ── First page: handle password gate and establish session cookies ──
-        seed_page = context.new_page()
-        seed_page.goto(CREATIVEHUB_URL, wait_until="domcontentloaded", timeout=30000)
+        page.goto(CREATIVEHUB_URL, wait_until="domcontentloaded", timeout=30000)
         try:
-            seed_page.wait_for_load_state("networkidle", timeout=10000)
+            page.wait_for_load_state("networkidle", timeout=10000)
         except Exception:
             pass
 
+        # Handle password gate if present
         try:
-            pwd_input = seed_page.locator('input[type="password"]')
+            pwd_input = page.locator('input[type="password"]')
             if pwd_input.is_visible(timeout=3000):
                 pwd_input.fill("123098")
-                seed_page.keyboard.press("Enter")
+                page.keyboard.press("Enter")
                 try:
-                    seed_page.wait_for_load_state("networkidle", timeout=10000)
+                    page.wait_for_load_state("networkidle", timeout=10000)
                 except Exception:
                     pass
-                seed_page.wait_for_timeout(500)
+                page.wait_for_timeout(500)
         except Exception:
             pass
 
-        seed_page.close()
         conn_status.success("✅ Connected to CreativeHub Reports")
 
         for tab_name in CREATIVEHUB_TABS:
             tab_status = st.empty()
             tab_status.write(f"🔄 **{tab_name}**: Capturing...")
             try:
-                # ── Open a fresh page per tab — avoids SPA state corruption ──
-                page = context.new_page()
-                page.goto(CREATIVEHUB_URL, wait_until="domcontentloaded", timeout=30000)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:
-                    pass
-                page.wait_for_timeout(600)
-
-                # ── Click the correct tab ─────────────────────────────────────
+                # Click the correct tab — pick topmost y-position match to avoid
+                # hitting gallery region badges that share the same label text.
                 click_result = page.evaluate(f"""
                     () => {{
                         const tabName = '{tab_name}';
@@ -400,9 +388,8 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # ── Force all lazy images to load ─────────────────────────────
-                # With a 15000px tall viewport everything is "in view", so most
-                # lazy images load automatically. This catches any stragglers.
+                # With a 15000px viewport all lazy images are "in view" and load
+                # automatically. Force any stragglers explicitly.
                 page.evaluate("""() => {
                     document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
                         img.loading = 'eager';
@@ -413,7 +400,6 @@ def capture_creativehub_reports():
                 page.wait_for_timeout(800)
 
                 page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
-                page.close()
 
                 future = upload_executor.submit(
                     background_upload, filename,
