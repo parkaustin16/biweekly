@@ -126,22 +126,51 @@ def capture_regional_images(target_url):
             
             try:
                 # 1. Click the tab
-                tab = page.locator(f'div[role="tab"]:has-text("{region}")')
-                tab.click()
+                tab = page.locator(f'div[role="tab"]:has-text("{region}")').first
+                try:
+                    tab.scroll_into_view_if_needed(timeout=5000)
+                except Exception:
+                    pass
+                tab.click(timeout=10000)
                 
                 # 2. Wait for content to load
                 try:
                     page.wait_for_function("() => document.querySelector('.loading-spinner') === null", timeout=5000)
                 except Exception:
                     pass
-                page.wait_for_timeout(800) # Slight buffer for URL state to update
+                page.wait_for_timeout(1200)
 
-                # --- NEW: CAPTURE SPECIFIC TAB URL ---
-                specific_tab_url = page.url 
+                # --- CAPTURE SPECIFIC TAB URL ---
+                specific_tab_url = page.url
 
                 safe_region = region.replace(' ', '-')
                 safe_date = capture_date.replace('-', '')
                 filename_week = week_id.replace(" ", "-")
+
+                # Expand Airtable's overflow-hidden containers and measure true content height
+                content_height = page.evaluate("""
+                    () => {
+                        [document.documentElement, document.body].forEach(el => {
+                            el.style.height = 'auto';
+                            el.style.overflow = 'visible';
+                        });
+                        document.querySelectorAll(
+                            '[data-testid="interface-page-content"], [class*="scrollLayer"], ' +
+                            '[class*="scrollContainer"], [class*="pageContent"], [class*="interfaceContent"]'
+                        ).forEach(el => {
+                            el.style.height = 'auto';
+                            el.style.maxHeight = 'none';
+                            el.style.overflow = 'visible';
+                        });
+                        return Math.max(
+                            document.body.scrollHeight,
+                            document.documentElement.scrollHeight,
+                            1080
+                        );
+                    }
+                """)
+                page.set_viewport_size({'width': 1920, 'height': min(int(content_height) + 400, 15000)})
+                page.wait_for_timeout(400)
 
                 # FULL PAGE SCREENSHOT
                 full_filename = f"{safe_region}-full.jpg"
