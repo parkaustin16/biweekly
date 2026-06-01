@@ -390,6 +390,8 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
+                get_height = "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+
                 # Force all lazy images to load
                 def force_lazy(p):
                     p.evaluate("""
@@ -401,42 +403,75 @@ def capture_creativehub_reports():
                             });
                         }
                     """)
-                force_lazy(page)
 
-                # Scroll down in steps to trigger any scroll-based lazy loaders
-                get_height = "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
-                total_height = page.evaluate(get_height)
-                step = 600
-                pos = 0
-                while pos < total_height:
-                    page.evaluate(f"window.scrollTo(0, {pos})")
-                    page.wait_for_timeout(150)
-                    pos += step
-                    total_height = page.evaluate(get_height)
-                page.evaluate("window.scrollTo(0, 0)")
+                def scroll_full(p):
+                    """Scroll through the full page in steps to trigger lazy loaders."""
+                    total = p.evaluate(get_height)
+                    pos = 0
+                    while pos < total:
+                        p.evaluate(f"window.scrollTo(0, {pos})")
+                        p.wait_for_timeout(150)
+                        pos += 600
+                        total = p.evaluate(get_height)
+                    p.evaluate("window.scrollTo(0, 0)")
+                    p.wait_for_timeout(400)
+
+                def expand_galleries(p):
+                    """Click all 'show more / load more / view all' expansion buttons
+                    until none remain. Handles galleries that reveal more rows on click."""
+                    EXPAND_TEXTS = [
+                        "show more", "load more", "view all", "see all",
+                        "show all", "load all", "more", "expand",
+                        "view more", "see more",
+                    ]
+                    for _ in range(20):  # max 20 rounds to avoid infinite loop
+                        clicked = p.evaluate("""
+                            (expandTexts) => {
+                                const btns = Array.from(document.querySelectorAll(
+                                    'button, a, [role="button"], [class*="more"], [class*="expand"], [class*="load"]'
+                                ));
+                                let count = 0;
+                                for (const btn of btns) {
+                                    const t = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+                                    if (expandTexts.some(x => t === x || t.startsWith(x))) {
+                                        const r = btn.getBoundingClientRect();
+                                        if (r.width > 0 && r.height > 0) {
+                                            btn.click();
+                                            count++;
+                                        }
+                                    }
+                                }
+                                return count;
+                            }
+                        """, EXPAND_TEXTS)
+                        if clicked == 0:
+                            break
+                        p.wait_for_timeout(800)  # wait for new content to render
+
+                # Step 1: initial lazy force + scroll to trigger loaders
+                force_lazy(page)
+                scroll_full(page)
+
+                # Step 2: expand any collapsed galleries
+                expand_galleries(page)
                 page.wait_for_timeout(600)
 
-                # First viewport resize
+                # Step 3: scroll again now that galleries are expanded
+                force_lazy(page)
+                scroll_full(page)
+
+                # Step 4: resize viewport to full content height
                 full_height = page.evaluate(get_height)
                 page.set_viewport_size({'width': 1920, 'height': min(full_height + 200, 20000)})
                 page.wait_for_timeout(600)
 
-                # Second lazy-load pass now that viewport is expanded (reveals more images)
+                # Step 5: second expand pass — viewport expansion may reveal more buttons
+                expand_galleries(page)
                 force_lazy(page)
                 page.wait_for_timeout(600)
 
-                # Do a second scroll pass in case expansion revealed more content
-                total_height2 = page.evaluate(get_height)
-                pos = 0
-                while pos < total_height2:
-                    page.evaluate(f"window.scrollTo(0, {pos})")
-                    page.wait_for_timeout(100)
-                    pos += step
-                    total_height2 = page.evaluate(get_height)
-                page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(400)
-
-                # Final height check — resize again if content grew
+                # Step 6: final scroll + height check after all expansions
+                scroll_full(page)
                 final_height = page.evaluate(get_height)
                 if final_height > full_height:
                     page.set_viewport_size({'width': 1920, 'height': min(final_height + 200, 20000)})
