@@ -125,15 +125,24 @@ def capture_regional_images(target_url):
             img_counter = 1
             
             try:
-                # 1. Click the tab
-                tab = page.locator(f'div[role="tab"]:has-text("{region}")').first
-                try:
-                    tab.scroll_into_view_if_needed(timeout=5000)
-                except Exception:
-                    pass
-                tab.click(timeout=10000)
-                
-                # 2. Wait for content to load
+                # 1. Click the tab via JS to bypass actionability/scroll issues
+                # Exact match first, then substring fallback
+                click_result = page.evaluate(f"""
+                    () => {{
+                        const tabs = Array.from(document.querySelectorAll('div[role="tab"]'));
+                        const exact = tabs.find(t => t.textContent.trim() === '{region}');
+                        if (exact) {{ exact.click(); return 'exact:' + exact.textContent.trim(); }}
+                        const fuzzy = tabs.find(t => t.textContent.trim().includes('{region}'));
+                        if (fuzzy) {{ fuzzy.click(); return 'fuzzy:' + fuzzy.textContent.trim(); }}
+                        return 'not_found:' + tabs.map(t => t.textContent.trim()).join('|');
+                    }}
+                """)
+                if click_result.startswith('not_found:'):
+                    available = click_result.replace('not_found:', '')
+                    raise Exception(f"Tab not found. Available tabs: [{available}]")
+                status_placeholder.write(f"🔄 **{region}**: Tab clicked ({click_result}), waiting...")
+
+                # 2. Wait for content to settle
                 try:
                     page.wait_for_function("() => document.querySelector('.loading-spinner') === null", timeout=5000)
                 except Exception:
@@ -341,6 +350,18 @@ def capture_creativehub_reports():
                 tab_url = page.url
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
+
+                # Scroll through the page in steps to trigger lazy-loaded images,
+                # then return to top before screenshotting
+                total_height = page.evaluate("document.body.scrollHeight")
+                scroll_y = 0
+                while scroll_y < total_height:
+                    page.evaluate(f"window.scrollTo(0, {scroll_y})")
+                    page.wait_for_timeout(150)
+                    scroll_y += 900
+                    total_height = page.evaluate("document.body.scrollHeight")
+                page.evaluate("window.scrollTo(0, 0)")
+                page.wait_for_timeout(600)
 
                 page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
 
