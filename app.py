@@ -337,31 +337,58 @@ def capture_creativehub_reports():
             tab_status = st.empty()
             tab_status.write(f"🔄 **{tab_name}**: Capturing...")
             try:
-                tab_locator = page.locator(
-                    f'[role="tab"]:has-text("{tab_name}")'
-                ).or_(page.locator(f'a:has-text("{tab_name}")'))
-                tab_locator.first.click()
+                # JS click to bypass actionability/timeout issues
+                click_result = page.evaluate(f"""
+                    () => {{
+                        const candidates = [
+                            ...document.querySelectorAll('[role="tab"]'),
+                            ...document.querySelectorAll('a, button, li')
+                        ];
+                        const exact = candidates.find(el => el.textContent.trim() === '{tab_name}');
+                        if (exact) {{ exact.click(); return 'exact:' + exact.textContent.trim(); }}
+                        const fuzzy = candidates.find(el => el.textContent.trim().includes('{tab_name}'));
+                        if (fuzzy) {{ fuzzy.click(); return 'fuzzy:' + fuzzy.textContent.trim(); }}
+                        return 'not_found:' + candidates.slice(0,20).map(e=>e.textContent.trim()).join('|');
+                    }}
+                """)
+                if click_result.startswith('not_found:'):
+                    raise Exception(f"Tab not found. Candidates: {click_result}")
+
                 try:
                     page.wait_for_load_state("networkidle", timeout=8000)
                 except Exception:
                     pass
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(800)
 
                 tab_url = page.url
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # Scroll through the page in steps to trigger lazy-loaded images,
-                # then return to top before screenshotting
+                # Force all lazy images to load, then set viewport to full scroll height
+                page.evaluate("""
+                    () => {
+                        document.querySelectorAll('img[loading="lazy"]').forEach(img => {
+                            img.loading = 'eager';
+                            if (img.dataset.src) img.src = img.dataset.src;
+                        });
+                    }
+                """)
+                # Scroll down in steps to trigger any remaining lazy content
                 total_height = page.evaluate("document.body.scrollHeight")
-                scroll_y = 0
-                while scroll_y < total_height:
-                    page.evaluate(f"window.scrollTo(0, {scroll_y})")
-                    page.wait_for_timeout(150)
-                    scroll_y += 900
+                step = 800
+                pos = 0
+                while pos < total_height:
+                    page.evaluate(f"window.scrollTo(0, {pos})")
+                    page.wait_for_timeout(120)
+                    pos += step
                     total_height = page.evaluate("document.body.scrollHeight")
                 page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(600)
+                page.wait_for_timeout(500)
+
+                # Resize viewport to actual full content height so screenshot is complete
+                full_height = page.evaluate("document.body.scrollHeight")
+                page.set_viewport_size({'width': 1920, 'height': min(full_height + 100, 20000)})
+                page.wait_for_timeout(300)
 
                 page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
 
