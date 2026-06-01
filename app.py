@@ -336,33 +336,45 @@ def capture_creativehub_reports():
             tab_status = st.empty()
             tab_status.write(f"🔄 **{tab_name}**: Capturing...")
             try:
-                # Find all elements whose trimmed text exactly matches the tab name,
-                # then sort by vertical position and click the topmost one.
-                # Nav tabs are always near the top of the page; gallery region badges
-                # are further down in the content area.
+                # Search only interactive/clickable elements for the tab name.
+                # If multiple match (e.g. nav tab + gallery badge), pick the
+                # topmost one by y-position — nav tabs are always near the top.
                 click_result = page.evaluate(f"""
                     () => {{
                         const tabName = '{tab_name}';
-                        const all = Array.from(document.querySelectorAll('*'));
-                        const matches = all.filter(el => {{
-                            if (el.textContent.trim() !== tabName) return false;
-                            const r = el.getBoundingClientRect();
-                            return r.width > 0 && r.height > 0;
+                        const candidates = Array.from(document.querySelectorAll(
+                            '[role="tab"], a, button, li'
+                        ));
+                        // Exact match first (trim both sides)
+                        let matches = candidates.filter(el => {{
+                            const t = (el.innerText || el.textContent || '').trim();
+                            return t === tabName;
                         }});
+                        // Fall back to startsWith match (handles "All (3)" style labels)
                         if (matches.length === 0) {{
-                            const sample = all
-                                .filter(el => el.getBoundingClientRect().width > 0)
-                                .slice(0, 30)
-                                .map(el => el.textContent.trim().slice(0, 20))
+                            matches = candidates.filter(el => {{
+                                const t = (el.innerText || el.textContent || '').trim();
+                                return t.startsWith(tabName);
+                            }});
+                        }}
+                        if (matches.length === 0) {{
+                            const sample = candidates.slice(0, 20)
+                                .map(el => (el.innerText || el.textContent || '').trim().slice(0, 30))
                                 .join('|');
                             return 'not_found:' + sample;
                         }}
-                        // Sort ascending by top position — nav tab will be topmost
-                        matches.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-                        const best = matches[0];
+                        // Only keep visible elements
+                        const visible = matches.filter(el => {{
+                            const r = el.getBoundingClientRect();
+                            return r.width > 0 && r.height > 0;
+                        }});
+                        const pool = visible.length > 0 ? visible : matches;
+                        // Sort by y-position ascending — nav tab is topmost
+                        pool.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+                        const best = pool[0];
                         best.click();
                         const r = best.getBoundingClientRect();
-                        return 'clicked:' + best.tagName + ':y=' + Math.round(r.top) + ':' + best.textContent.trim();
+                        return 'clicked:' + best.tagName + ':y=' + Math.round(r.top) + ':' + (best.innerText || best.textContent || '').trim();
                     }}
                 """)
                 if click_result.startswith('not_found:'):
