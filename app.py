@@ -390,9 +390,44 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                get_height = "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+                get_height = """
+                    Math.max(
+                        document.body.scrollHeight,
+                        document.body.offsetHeight,
+                        document.documentElement.scrollHeight,
+                        document.documentElement.offsetHeight,
+                        ...Array.from(document.querySelectorAll('*')).map(el => {
+                            const r = el.getBoundingClientRect();
+                            return Math.round(r.bottom + window.scrollY);
+                        })
+                    )
+                """
 
-                # Force all lazy images to load
+                def strip_overflow(p):
+                    """Remove overflow:hidden and max-height constraints from every element
+                    so clipped gallery content becomes part of the true document height."""
+                    p.evaluate("""
+                        () => {
+                            const style = document.createElement('style');
+                            style.id = '__fullcap_override';
+                            style.textContent = `
+                                * {
+                                    overflow: visible !important;
+                                    max-height: none !important;
+                                    height: auto !important;
+                                }
+                                html, body {
+                                    overflow: visible !important;
+                                    height: auto !important;
+                                }
+                            `;
+                            // Only inject once
+                            if (!document.getElementById('__fullcap_override')) {
+                                document.head.appendChild(style);
+                            }
+                        }
+                    """)
+
                 def force_lazy(p):
                     p.evaluate("""
                         () => {
@@ -405,7 +440,6 @@ def capture_creativehub_reports():
                     """)
 
                 def scroll_full(p):
-                    """Scroll through the full page in steps to trigger lazy loaders."""
                     total = p.evaluate(get_height)
                     pos = 0
                     while pos < total:
@@ -416,66 +450,33 @@ def capture_creativehub_reports():
                     p.evaluate("window.scrollTo(0, 0)")
                     p.wait_for_timeout(400)
 
-                def expand_galleries(p):
-                    """Click all 'show more / load more / view all' expansion buttons
-                    until none remain. Handles galleries that reveal more rows on click."""
-                    EXPAND_TEXTS = [
-                        "show more", "load more", "view all", "see all",
-                        "show all", "load all", "more", "expand",
-                        "view more", "see more",
-                    ]
-                    for _ in range(20):  # max 20 rounds to avoid infinite loop
-                        clicked = p.evaluate("""
-                            (expandTexts) => {
-                                const btns = Array.from(document.querySelectorAll(
-                                    'button, a, [role="button"], [class*="more"], [class*="expand"], [class*="load"]'
-                                ));
-                                let count = 0;
-                                for (const btn of btns) {
-                                    const t = (btn.innerText || btn.textContent || '').trim().toLowerCase();
-                                    if (expandTexts.some(x => t === x || t.startsWith(x))) {
-                                        const r = btn.getBoundingClientRect();
-                                        if (r.width > 0 && r.height > 0) {
-                                            btn.click();
-                                            count++;
-                                        }
-                                    }
-                                }
-                                return count;
-                            }
-                        """, EXPAND_TEXTS)
-                        if clicked == 0:
-                            break
-                        p.wait_for_timeout(800)  # wait for new content to render
+                # Step 1: strip all overflow/height constraints so content is fully visible
+                strip_overflow(page)
+                page.wait_for_timeout(500)
 
-                # Step 1: initial lazy force + scroll to trigger loaders
+                # Step 2: force lazy images + scroll to trigger remaining loaders
                 force_lazy(page)
                 scroll_full(page)
 
-                # Step 2: expand any collapsed galleries
-                expand_galleries(page)
-                page.wait_for_timeout(600)
-
-                # Step 3: scroll again now that galleries are expanded
-                force_lazy(page)
-                scroll_full(page)
-
-                # Step 4: resize viewport to full content height
+                # Step 3: measure true height and resize viewport to match
                 full_height = page.evaluate(get_height)
-                page.set_viewport_size({'width': 1920, 'height': min(full_height + 200, 20000)})
+                page.set_viewport_size({'width': 1920, 'height': min(full_height + 300, 20000)})
                 page.wait_for_timeout(600)
 
-                # Step 5: second expand pass — viewport expansion may reveal more buttons
-                expand_galleries(page)
+                # Step 4: strip again (SPAs may reattach styles after re-render)
+                strip_overflow(page)
                 force_lazy(page)
-                page.wait_for_timeout(600)
+                page.wait_for_timeout(500)
 
-                # Step 6: final scroll + height check after all expansions
+                # Step 5: final scroll + remeasure after viewport/style changes
                 scroll_full(page)
                 final_height = page.evaluate(get_height)
                 if final_height > full_height:
-                    page.set_viewport_size({'width': 1920, 'height': min(final_height + 200, 20000)})
+                    page.set_viewport_size({'width': 1920, 'height': min(final_height + 300, 20000)})
                     page.wait_for_timeout(400)
+
+                page.evaluate("window.scrollTo(0, 0)")
+                page.wait_for_timeout(300)
 
                 page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
 
