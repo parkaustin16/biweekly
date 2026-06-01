@@ -390,88 +390,84 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                def get_full_height(p):
-                    """True page height: max of scrollHeight props + reduce over all
-                    element rects (avoids Math.max spread stack-overflow on large DOMs)."""
-                    return p.evaluate("""() => {
-                        const byRect = Array.from(document.querySelectorAll('*'))
-                            .reduce((max, el) => {
-                                const b = el.getBoundingClientRect().bottom + window.scrollY;
-                                return b > max ? b : max;
-                            }, 0);
-                        return Math.max(
-                            byRect,
-                            document.body.scrollHeight,
-                            document.body.offsetHeight,
-                            document.documentElement.scrollHeight,
-                            document.documentElement.offsetHeight
-                        );
-                    }""")
+                # ── Expand the true scrollable container ──────────────────────
+                # SPAs often put content in an inner div with overflow-y:auto /
+                # overflow-y:scroll rather than letting body scroll. We find that
+                # container, scroll it to load lazy content, then remove its height
+                # constraint so body.scrollHeight reflects the full content.
+                page.evaluate("""() => {
+                    // 1. Find all inner scrollable containers (skip html/body)
+                    const scrollers = Array.from(document.querySelectorAll('*')).filter(el => {
+                        if (el === document.body || el === document.documentElement) return false;
+                        const s = window.getComputedStyle(el);
+                        return (s.overflowY === 'scroll' || s.overflowY === 'auto')
+                            && el.scrollHeight > el.clientHeight + 50;
+                    });
 
-                def strip_overflow(p):
-                    """Strip overflow:hidden and max-height from elements that clip content.
-                    Does NOT set height:auto globally — that breaks aspect-ratio containers."""
-                    p.evaluate("""() => {
-                        if (document.getElementById('__fullcap_override')) return;
-                        const s = document.createElement('style');
-                        s.id = '__fullcap_override';
-                        s.textContent = `
-                            html, body {
-                                overflow: visible !important;
-                                height: auto !important;
-                                max-height: none !important;
-                            }
-                            div, section, article, main, aside, header, footer {
-                                overflow: visible !important;
-                                max-height: none !important;
-                            }
-                        `;
-                        document.head.appendChild(s);
-                    }""")
+                    // 2. Scroll each container to bottom then back to trigger lazy loads
+                    scrollers.forEach(el => {
+                        el.scrollTop = el.scrollHeight;
+                    });
 
-                def force_lazy(p):
-                    p.evaluate("""() => {
-                        document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
-                            img.loading = 'eager';
-                            if (img.dataset.src) img.src = img.dataset.src;
-                            if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
-                        });
-                    }""")
+                    // 3. Expand them: remove height cap and overflow clipping
+                    scrollers.forEach(el => {
+                        el.style.overflow = 'visible';
+                        el.style.overflowY = 'visible';
+                        el.style.height = 'auto';
+                        el.style.maxHeight = 'none';
+                    });
 
-                def scroll_full(p):
-                    total = p.evaluate("document.documentElement.scrollHeight")
-                    pos = 0
-                    while pos < total:
-                        p.evaluate(f"window.scrollTo(0, {pos})")
-                        p.wait_for_timeout(150)
-                        pos += 600
-                        total = p.evaluate("document.documentElement.scrollHeight")
-                    p.evaluate("window.scrollTo(0, 0)")
-                    p.wait_for_timeout(400)
+                    // 4. Expand body/html too
+                    document.body.style.overflow = 'visible';
+                    document.body.style.height = 'auto';
+                    document.body.style.maxHeight = 'none';
+                    document.documentElement.style.overflow = 'visible';
+                    document.documentElement.style.height = 'auto';
+                    document.documentElement.style.maxHeight = 'none';
+                }""")
+                page.wait_for_timeout(600)
 
-                # Step 1: strip overflow constraints from layout containers
-                strip_overflow(page)
+                # ── Force lazy images eager ────────────────────────────────────
+                page.evaluate("""() => {
+                    document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
+                        img.loading = 'eager';
+                        if (img.dataset.src) img.src = img.dataset.src;
+                        if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
+                    });
+                }""")
+
+                # ── Scroll window to trigger any window-scroll lazy loaders ───
+                total_height = page.evaluate("document.body.scrollHeight")
+                pos = 0
+                while pos < total_height:
+                    page.evaluate(f"window.scrollTo(0, {pos})")
+                    page.wait_for_timeout(120)
+                    pos += 600
+                    total_height = page.evaluate("document.body.scrollHeight")
+                page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(500)
 
-                # Step 2: force eager images + scroll to trigger remaining lazy loaders
-                force_lazy(page)
-                scroll_full(page)
-
-                # Step 3: measure true height (uses reduce, not spread — avoids JS stack overflow)
-                full_height = get_full_height(page)
+                # ── Resize viewport to full content height ────────────────────
+                full_height = page.evaluate("""() => Math.max(
+                    document.body.scrollHeight,
+                    document.body.offsetHeight,
+                    document.documentElement.scrollHeight,
+                    document.documentElement.offsetHeight
+                )""")
                 page.set_viewport_size({'width': 1920, 'height': min(int(full_height) + 300, 20000)})
                 page.wait_for_timeout(600)
 
-                # Step 4: second pass — viewport expansion may expose more lazy images
-                force_lazy(page)
-                scroll_full(page)
-                final_height = get_full_height(page)
-                if final_height > full_height:
-                    page.set_viewport_size({'width': 1920, 'height': min(int(final_height) + 300, 20000)})
-                    page.wait_for_timeout(400)
+                # ── Second lazy pass now that viewport is taller ───────────────
+                page.evaluate("""() => {
+                    document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
+                        img.loading = 'eager';
+                        if (img.dataset.src) img.src = img.dataset.src;
+                    });
+                }""")
+                page.wait_for_timeout(500)
 
                 page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(300)
+                page.wait_for_timeout(200)
 
                 page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
 
