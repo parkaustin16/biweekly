@@ -390,89 +390,84 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                get_height = """
-                    Math.max(
-                        document.body.scrollHeight,
-                        document.body.offsetHeight,
-                        document.documentElement.scrollHeight,
-                        document.documentElement.offsetHeight,
-                        ...Array.from(document.querySelectorAll('*')).map(el => {
-                            const r = el.getBoundingClientRect();
-                            return Math.round(r.bottom + window.scrollY);
-                        })
-                    )
-                """
+                def get_full_height(p):
+                    """True page height: max of scrollHeight props + reduce over all
+                    element rects (avoids Math.max spread stack-overflow on large DOMs)."""
+                    return p.evaluate("""() => {
+                        const byRect = Array.from(document.querySelectorAll('*'))
+                            .reduce((max, el) => {
+                                const b = el.getBoundingClientRect().bottom + window.scrollY;
+                                return b > max ? b : max;
+                            }, 0);
+                        return Math.max(
+                            byRect,
+                            document.body.scrollHeight,
+                            document.body.offsetHeight,
+                            document.documentElement.scrollHeight,
+                            document.documentElement.offsetHeight
+                        );
+                    }""")
 
                 def strip_overflow(p):
-                    """Remove overflow:hidden and max-height constraints from every element
-                    so clipped gallery content becomes part of the true document height."""
-                    p.evaluate("""
-                        () => {
-                            const style = document.createElement('style');
-                            style.id = '__fullcap_override';
-                            style.textContent = `
-                                * {
-                                    overflow: visible !important;
-                                    max-height: none !important;
-                                    height: auto !important;
-                                }
-                                html, body {
-                                    overflow: visible !important;
-                                    height: auto !important;
-                                }
-                            `;
-                            // Only inject once
-                            if (!document.getElementById('__fullcap_override')) {
-                                document.head.appendChild(style);
+                    """Strip overflow:hidden and max-height from elements that clip content.
+                    Does NOT set height:auto globally — that breaks aspect-ratio containers."""
+                    p.evaluate("""() => {
+                        if (document.getElementById('__fullcap_override')) return;
+                        const s = document.createElement('style');
+                        s.id = '__fullcap_override';
+                        s.textContent = `
+                            html, body {
+                                overflow: visible !important;
+                                height: auto !important;
+                                max-height: none !important;
                             }
-                        }
-                    """)
+                            div, section, article, main, aside, header, footer {
+                                overflow: visible !important;
+                                max-height: none !important;
+                            }
+                        `;
+                        document.head.appendChild(s);
+                    }""")
 
                 def force_lazy(p):
-                    p.evaluate("""
-                        () => {
-                            document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
-                                img.loading = 'eager';
-                                if (img.dataset.src) img.src = img.dataset.src;
-                                if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
-                            });
-                        }
-                    """)
+                    p.evaluate("""() => {
+                        document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
+                            img.loading = 'eager';
+                            if (img.dataset.src) img.src = img.dataset.src;
+                            if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
+                        });
+                    }""")
 
                 def scroll_full(p):
-                    total = p.evaluate(get_height)
+                    total = p.evaluate("document.documentElement.scrollHeight")
                     pos = 0
                     while pos < total:
                         p.evaluate(f"window.scrollTo(0, {pos})")
                         p.wait_for_timeout(150)
                         pos += 600
-                        total = p.evaluate(get_height)
+                        total = p.evaluate("document.documentElement.scrollHeight")
                     p.evaluate("window.scrollTo(0, 0)")
                     p.wait_for_timeout(400)
 
-                # Step 1: strip all overflow/height constraints so content is fully visible
+                # Step 1: strip overflow constraints from layout containers
                 strip_overflow(page)
                 page.wait_for_timeout(500)
 
-                # Step 2: force lazy images + scroll to trigger remaining loaders
+                # Step 2: force eager images + scroll to trigger remaining lazy loaders
                 force_lazy(page)
                 scroll_full(page)
 
-                # Step 3: measure true height and resize viewport to match
-                full_height = page.evaluate(get_height)
-                page.set_viewport_size({'width': 1920, 'height': min(full_height + 300, 20000)})
+                # Step 3: measure true height (uses reduce, not spread — avoids JS stack overflow)
+                full_height = get_full_height(page)
+                page.set_viewport_size({'width': 1920, 'height': min(int(full_height) + 300, 20000)})
                 page.wait_for_timeout(600)
 
-                # Step 4: strip again (SPAs may reattach styles after re-render)
-                strip_overflow(page)
+                # Step 4: second pass — viewport expansion may expose more lazy images
                 force_lazy(page)
-                page.wait_for_timeout(500)
-
-                # Step 5: final scroll + remeasure after viewport/style changes
                 scroll_full(page)
-                final_height = page.evaluate(get_height)
+                final_height = get_full_height(page)
                 if final_height > full_height:
-                    page.set_viewport_size({'width': 1920, 'height': min(final_height + 300, 20000)})
+                    page.set_viewport_size({'width': 1920, 'height': min(int(final_height) + 300, 20000)})
                     page.wait_for_timeout(400)
 
                 page.evaluate("window.scrollTo(0, 0)")
