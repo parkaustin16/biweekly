@@ -429,50 +429,36 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 3: unlock the scroller using setProperty with 'important'
-                # (beats stylesheet rules including height:100vh), hide post-gallery
-                # siblings, then measure gallery's true bottom via a forced reflow.
-                clip_height = page.evaluate("""() => {
+                # Step 3: collect debug info and compute clip height
+                debug = page.evaluate("""() => {
                     const scroller = window.__ch_scroller;
                     const gallery = document.querySelector('section#gallery');
-
-                    if (scroller) {
-                        scroller.scrollTop = 0;
-                        scroller.style.setProperty('height', 'auto', 'important');
-                        scroller.style.setProperty('max-height', 'none', 'important');
-                        scroller.style.setProperty('min-height', '0', 'important');
-                        scroller.style.setProperty('overflow', 'visible', 'important');
-                        scroller.style.setProperty('overflow-y', 'visible', 'important');
-                    }
-                    if (gallery) {
-                        gallery.style.setProperty('min-height', '0', 'important');
-                        gallery.style.setProperty('height', 'auto', 'important');
-                        gallery.style.setProperty('max-height', 'none', 'important');
-                        // Hide everything after gallery (footer etc.) so it can't
-                        // inflate the captured height.
-                        let sib = gallery.nextElementSibling;
-                        while (sib) { sib.style.display = 'none'; sib = sib.nextElementSibling; }
-                    }
-                    document.body.style.setProperty('height', 'auto', 'important');
-                    document.body.style.setProperty('max-height', 'none', 'important');
-                    document.documentElement.style.setProperty('height', 'auto', 'important');
-                    document.documentElement.style.setProperty('max-height', 'none', 'important');
-
-                    if (!gallery) {
-                        return Math.max(document.documentElement.scrollHeight, 2000);
-                    }
-                    // getBoundingClientRect() forces a synchronous layout flush —
-                    // returns true bottom of gallery after all style changes applied.
-                    return Math.round(gallery.getBoundingClientRect().bottom) + 24;
+                    const out = {
+                        scrollerFound: !!scroller,
+                        galleryFound: !!gallery,
+                        viewportH: window.innerHeight,
+                        scrollerTag: scroller ? scroller.tagName : null,
+                        scrollerClass: scroller ? scroller.className.slice(0,80) : null,
+                        scrollerClientH: scroller ? scroller.clientHeight : null,
+                        scrollerScrollH: scroller ? scroller.scrollHeight : null,
+                        galleryRect: gallery ? {
+                            top: Math.round(gallery.getBoundingClientRect().top),
+                            bottom: Math.round(gallery.getBoundingClientRect().bottom),
+                            height: Math.round(gallery.getBoundingClientRect().height),
+                        } : null,
+                        galleryScrollH: gallery ? gallery.scrollHeight : null,
+                        bodyScrollH: document.body.scrollHeight,
+                        docScrollH: document.documentElement.scrollHeight,
+                    };
+                    return out;
                 }""")
+                tab_status.write(f"DEBUG {tab_name}: {debug}")
+                
+                clip_height = debug.get('galleryRect', {}).get('bottom', 2000) + 24 if debug.get('galleryRect') else 2000
 
-                # Scroller now has height:auto !important — it won't re-expand to 100vh
-                # when viewport changes. Background fills exactly clip_height. No empty space.
                 page.set_viewport_size({'width': 1920, 'height': int(clip_height)})
                 page.wait_for_timeout(300)
                 page.screenshot(path=filename, type="jpeg", quality=85)
-
-                # Reset viewport for next tab's scroller detection (needs 100vh < scrollHeight).
                 page.set_viewport_size({'width': 1920, 'height': 1080})
 
                 future = upload_executor.submit(
