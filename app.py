@@ -449,6 +449,15 @@ def capture_creativehub_reports():
                         galleryScrollH: gallery ? gallery.scrollHeight : null,
                         bodyScrollH: document.body.scrollHeight,
                         docScrollH: document.documentElement.scrollHeight,
+                        startY: (() => {
+                            const all = document.querySelectorAll('p');
+                            for (const p of all) {
+                                if ((p.innerText || p.textContent || '').trim() === 'D2C Creative Hub') {
+                                    return Math.round(p.getBoundingClientRect().top);
+                                }
+                            }
+                            return 0;
+                        })(),
                     };
                     return out;
                 }""")
@@ -457,10 +466,14 @@ def capture_creativehub_reports():
                 st.write(f"DEBUG {tab_name}: {debug}")
                 
                 clip_height = debug.get('galleryRect', {}).get('bottom', 2000) + 24 if debug.get('galleryRect') else 2000
+                start_y = debug.get('startY', 0)
 
                 page.set_viewport_size({'width': 1920, 'height': int(clip_height)})
                 page.wait_for_timeout(300)
-                page.screenshot(path=filename, type="jpeg", quality=85)
+                page.screenshot(
+                    path=filename, type="jpeg", quality=85,
+                    clip={'x': 0, 'y': start_y, 'width': 1920, 'height': int(clip_height) - start_y}
+                )
                 page.set_viewport_size({'width': 1920, 'height': 1080})
 
                 future = upload_executor.submit(
