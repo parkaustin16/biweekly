@@ -460,36 +460,16 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(500)
 
-                # Hide the floating nav panel — click Close menu to dismiss it,
-                # then also force-hide via JS in case it animates back.
+                # Hide the floating nav panel via injected CSS (most reliable approach).
                 page.evaluate("""() => {
-                    // Click the close button to properly dismiss the panel
-                    const btn = document.querySelector('[aria-label="Close menu"]');
-                    if (btn) btn.click();
+                    const style = document.createElement('style');
+                    style.textContent = `
+                        div[style*="172px"] { display: none !important; }
+                        [aria-label="Close menu"] { display: none !important; }
+                    `;
+                    document.head.appendChild(style);
                 }""")
-                page.wait_for_timeout(300)
-                page.evaluate("""() => {
-                    // Force-hide any remnant: walk up from the button to its
-                    // outermost non-scroller, non-body positioned ancestor and hide it.
-                    const btn = document.querySelector('[aria-label="Close menu"]');
-                    if (btn) {
-                        let el = btn.parentElement;
-                        while (el && el !== document.body) {
-                            const s = window.getComputedStyle(el);
-                            if (s.position === 'fixed' || s.position === 'absolute') {
-                                el.style.setProperty('display', 'none', 'important');
-                                break;
-                            }
-                            el = el.parentElement;
-                        }
-                        // Also hide directly by inline width regardless of position
-                        document.querySelectorAll('div').forEach(d => {
-                            if (d.getAttribute('style') && d.getAttribute('style').includes('172px')) {
-                                d.style.setProperty('display', 'none', 'important');
-                            }
-                        });
-                    }
-                }""")
+                page.wait_for_timeout(200)
 
                 # Step 4: measure crop bounds after layout has settled.
                 # Use textContent (not innerText) — innerText applies CSS text-transform
