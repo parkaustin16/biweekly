@@ -407,6 +407,28 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
+                # Extract the active week label from the highlighted week button.
+                # The selected pill has a red/dark background and text like "W23-W24".
+                week_label = page.evaluate("""() => {
+                    // Try URL first (SPA may update it)
+                    const urlMatch = window.location.pathname.match(/(\\d{1,2}-\\d{1,2})\\/?$/);
+                    if (urlMatch) return 'W' + urlMatch[1];
+                    // Fall back to the visually-selected week button
+                    const btns = Array.from(document.querySelectorAll('button, a'));
+                    for (const btn of btns) {
+                        const txt = (btn.textContent || '').trim();
+                        if (/^W\\d{1,2}-W\\d{1,2}$/.test(txt)) {
+                            const style = window.getComputedStyle(btn);
+                            const bg = style.backgroundColor;
+                            // Selected pill has a non-transparent/non-white background
+                            if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'rgb(255, 255, 255)') {
+                                return txt;
+                            }
+                        }
+                    }
+                    return '';
+                """)
+
                 # Step 1: find the inner scroller and scroll to trigger lazy image loading
                 page.evaluate("""() => {
                     const scroller = Array.from(document.querySelectorAll('*')).find(el => {
@@ -509,6 +531,7 @@ def capture_creativehub_reports():
                     "tab": tab_name,
                     "date": capture_date,
                     "tab_url": tab_url,
+                    "week": week_label,
                     "local": filename,
                     "future": future,
                 })
@@ -537,8 +560,10 @@ def sync_creativehub_to_airtable(data_list):
 
     records_to_create = []
     for item in data_list:
-        week_match = re.search(r'(\d{1,2}-\d{1,2})\/?$', item.get('tab_url', ''))
-        week = f"W{week_match.group(1)}" if week_match else ""
+        week = item.get('week', '')
+        if not week:
+            week_match = re.search(r'(\d{1,2}-\d{1,2})\/?$', item.get('tab_url', ''))
+            week = f"W{week_match.group(1)}" if week_match else ""
         label = f"{week} | Bi Weekly CreativeHub Report | {item['tab']}" if week else f"Bi Weekly CreativeHub Report | {item['tab']}"
         fields = {
             "Type": label,
