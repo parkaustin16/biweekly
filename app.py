@@ -306,7 +306,7 @@ def capture_creativehub_reports():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            viewport={'width': 1920, 'height': 15000},
+            viewport={'width': 1920, 'height': 1080},
             device_scale_factor=2
         )
         page = context.new_page()
@@ -404,46 +404,75 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # With a 15000px viewport all lazy images are "in view" and load
-                # automatically. Force any stragglers explicitly.
+                # Step 1: Scroll the inner scrollable container to trigger lazy loads.
+                # The page uses a fixed-height inner div (height:100vh, overflow:auto)
+                # so window.scrollTo does nothing — we must scroll the container itself.
                 page.evaluate("""() => {
-                    document.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(img => {
+                    const scroller = Array.from(document.querySelectorAll('*')).find(el => {
+                        if (el === document.body || el === document.documentElement) return false;
+                        const s = window.getComputedStyle(el);
+                        return (s.overflowY === 'scroll' || s.overflowY === 'auto')
+                            && el.scrollHeight > el.clientHeight + 100;
+                    });
+                    if (scroller) {
+                        // Scroll to bottom to trigger lazy loaders, then back to top
+                        scroller.scrollTop = scroller.scrollHeight;
+                        window.__ch_scroller = scroller;
+                    }
+                }""")
+                page.wait_for_timeout(600)
+
+                # Step 2: Force all lazy images eager
+                page.evaluate("""() => {
+                    document.querySelectorAll('img').forEach(img => {
                         img.loading = 'eager';
                         if (img.dataset.src) img.src = img.dataset.src;
                         if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
                     });
                 }""")
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(500)
 
-                # Clip to the bottom of the last card in the Completed Gallery.
-                # Using the last card's edge (not the section's) avoids capturing
-                # the section's own bottom padding as empty space.
+                # Step 3: Expand the inner container so body.scrollHeight reflects
+                # full content height (removes height:100vh and overflow clipping)
+                page.evaluate("""() => {
+                    const scroller = window.__ch_scroller;
+                    if (scroller) {
+                        scroller.style.height = 'auto';
+                        scroller.style.maxHeight = 'none';
+                        scroller.style.overflow = 'visible';
+                        scroller.scrollTop = 0;
+                    }
+                    document.body.style.overflow = 'visible';
+                    document.body.style.height = 'auto';
+                    document.documentElement.style.overflow = 'visible';
+                    document.documentElement.style.height = 'auto';
+                }""")
+                page.wait_for_timeout(500)
+
+                # Step 4: Clip to the bottom of section#gallery (the Completed Gallery).
                 clip_height = page.evaluate("""() => {
-                    // Find the Completed Gallery section by its heading text
-                    let gallerySection = null;
-                    for (const h of document.querySelectorAll('h2, h3, h4')) {
-                        if (h.textContent.trim().includes('Completed Gallery')) {
-                            gallerySection = h.closest('section') || h.parentElement;
-                            break;
-                        }
-                    }
-                    // Fallback: find by id
-                    if (!gallerySection) {
-                        gallerySection = document.querySelector('section#gallery');
-                    }
-                    if (gallerySection) {
-                        // Use the last gallery card's bottom edge
-                        const cards = Array.from(gallerySection.querySelectorAll('a'));
-                        const target = cards.length ? cards[cards.length - 1] : gallerySection;
-                        const r = target.getBoundingClientRect();
+                    const gallery = document.querySelector('section#gallery');
+                    if (gallery) {
+                        const r = gallery.getBoundingClientRect();
                         return Math.round(r.bottom + window.scrollY) + 24;
+                    }
+                    // fallback: find by heading text
+                    for (const h of document.querySelectorAll('h2,h3,h4')) {
+                        if (h.textContent.includes('Completed Gallery')) {
+                            const s = h.closest('section') || h.parentElement;
+                            if (s) {
+                                const r = s.getBoundingClientRect();
+                                return Math.round(r.bottom + window.scrollY) + 24;
+                            }
+                        }
                     }
                     return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
                 }""")
 
                 page.screenshot(
                     path=filename,
-                    clip={"x": 0, "y": 0, "width": 1920, "height": clip_height},
+                    full_page=True,
+                    clip={"x": 0, "y": 0, "width": 1920, "height": int(clip_height)},
                     type="jpeg",
                     quality=85
                 )
