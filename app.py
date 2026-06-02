@@ -429,57 +429,28 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 3: measure gallery bottom, then size the scroller to exactly
-                # that height. Keep scroller overflow as-is (clips below gallery).
-                # Only set height:auto on ancestors so they expand to fit the scroller.
+                # Step 3: expand viewport so the 100vh scroller grows to show all
+                # content without scrolling — makes getBoundingClientRect accurate.
+                page.set_viewport_size({'width': 1920, 'height': 4000})
+                page.wait_for_timeout(600)
+
+                # Step 4: measure where section#gallery ends in the expanded viewport.
+                # With scrollTop=0 (nothing to scroll at 4000px), bottom is exact.
                 clip_height = page.evaluate("""() => {
-                    const scroller = window.__ch_scroller;
                     const gallery = document.querySelector('section#gallery');
-
-                    if (scroller && gallery) {
-                        scroller.scrollTop = 0;
-                        const scrollerTop = scroller.getBoundingClientRect().top;
-                        // gallery bottom relative to scroller top when scrollTop=0
-                        const galleryBottom =
-                            gallery.getBoundingClientRect().bottom - scrollerTop;
-                        const targetH = Math.round(galleryBottom) + 24;
-
-                        // Resize scroller to gallery-bottom height.
-                        // Do NOT change overflow — keep it clipping content below gallery.
-                        scroller.style.height = targetH + 'px';
-                        scroller.style.maxHeight = 'none';
-
-                        // Walk every ancestor: height:auto so they expand to fit,
-                        // but leave overflow alone so nothing extra bleeds through.
-                        let el = scroller.parentElement;
-                        while (el && el !== document.documentElement) {
-                            el.style.height = 'auto';
-                            el.style.maxHeight = 'none';
-                            el.style.minHeight = '0';
-                            el = el.parentElement;
-                        }
-                        document.body.style.height = 'auto';
-                        document.body.style.maxHeight = 'none';
-                        document.body.style.minHeight = '0';
-                        document.documentElement.style.height = 'auto';
-                        document.documentElement.style.maxHeight = 'none';
-                        document.documentElement.style.minHeight = '0';
-
-                        return Math.round(scrollerTop) + targetH;
-                    }
-
-                    // Fallback: no inner scroller
-                    if (gallery) {
-                        const r = gallery.getBoundingClientRect();
-                        return Math.round(r.bottom + window.scrollY) + 24;
-                    }
-                    return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+                    if (!gallery) return 4000;
+                    return Math.round(gallery.getBoundingClientRect().bottom) + 24;
                 }""")
-                page.wait_for_timeout(400)
 
-                page.set_viewport_size({'width': 1920, 'height': int(clip_height)})
-                page.wait_for_timeout(300)
-                page.screenshot(path=filename, type="jpeg", quality=85)
+                # Step 5: screenshot clipped precisely at gallery bottom.
+                # No DOM style changes — Playwright's clip does the cropping.
+                page.screenshot(
+                    path=filename, type="jpeg", quality=85,
+                    clip={'x': 0, 'y': 0, 'width': 1920, 'height': int(clip_height)}
+                )
+
+                # Reset viewport for next tab's scroller detection (needs 100vh < scrollHeight).
+                page.set_viewport_size({'width': 1920, 'height': 1080})
 
                 future = upload_executor.submit(
                     background_upload, filename,
