@@ -493,7 +493,8 @@ def capture_creativehub_reports():
                     if (btn) {
                         let el = btn;
                         while (el && el !== document.body) {
-                            if (el.style && el.style.width && el.style.width.includes('172')) {
+                            const styleAttr = el.getAttribute('style') || '';
+                            if (styleAttr.includes('172px')) {
                                 panelLeft = Math.round(el.getBoundingClientRect().left);
                                 break;
                             }
@@ -510,7 +511,8 @@ def capture_creativehub_reports():
                 img = Image.open(io.BytesIO(png_bytes))
                 top_px = max(0, coords['startY'] * dpr)
                 bot_px = min(img.height, coords['endY'] * dpr)
-                right_px = coords['panelLeft'] * dpr  # crop at actual panel left edge
+                panel_left = coords['panelLeft']
+                right_px = (panel_left * dpr) if panel_left > 100 else img.width
                 img.crop((0, top_px, right_px, bot_px)).save(filename, "JPEG", quality=85)
 
                 future = upload_executor.submit(
