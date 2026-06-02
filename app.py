@@ -559,7 +559,7 @@ def sync_creativehub_to_airtable(data_list):
         if not week:
             week_match = re.search(r'(\d{1,2}-\d{1,2})\/?$', item.get('tab_url', ''))
             week = f"W{week_match.group(1)}" if week_match else ""
-        label = f"{week} | Bi Weekly CreativeHub Report | {item['tab']}" if week else f"Bi Weekly CreativeHub Report | {item['tab']}"
+        label = f"{week} | Bi Weekly Report | {item['tab']}" if week else f"Bi Weekly Report | {item['tab']}"
         fields = {
             "Type": label,
             "Date": item["date"],
