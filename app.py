@@ -486,7 +486,21 @@ def capture_creativehub_reports():
                     const endY = gallery
                         ? Math.round(gallery.getBoundingClientRect().bottom) + 24
                         : document.documentElement.scrollHeight;
-                    return {startY, endY};
+
+                    // Find the panel's left edge so we can crop it out precisely.
+                    let panelLeft = window.innerWidth;
+                    const btn = document.querySelector('[aria-label="Close menu"]');
+                    if (btn) {
+                        let el = btn;
+                        while (el && el !== document.body) {
+                            if (el.style && el.style.width && el.style.width.includes('172')) {
+                                panelLeft = Math.round(el.getBoundingClientRect().left);
+                                break;
+                            }
+                            el = el.parentElement;
+                        }
+                    }
+                    return {startY, endY, panelLeft};
                 }""")
 
                 # Step 5: full_page PNG captures all content regardless of viewport,
@@ -496,7 +510,7 @@ def capture_creativehub_reports():
                 img = Image.open(io.BytesIO(png_bytes))
                 top_px = max(0, coords['startY'] * dpr)
                 bot_px = min(img.height, coords['endY'] * dpr)
-                right_px = img.width - (172 * dpr)  # strip the 172px floating nav panel
+                right_px = coords['panelLeft'] * dpr  # crop at actual panel left edge
                 img.crop((0, top_px, right_px, bot_px)).save(filename, "JPEG", quality=85)
 
                 future = upload_executor.submit(
