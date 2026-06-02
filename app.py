@@ -339,6 +339,22 @@ def capture_creativehub_reports():
             tab_status = st.empty()
             tab_status.write(f"🔄 **{tab_name}**: Capturing...")
             try:
+                # Wait until nav tabs are actually rendered before clicking.
+                # "Skip to main content" appearing alone means JS hasn't run yet.
+                try:
+                    page.wait_for_function(
+                        """() => {
+                            const candidates = document.querySelectorAll('[role="tab"], a, button, li');
+                            return Array.from(candidates).some(el => {
+                                const t = (el.innerText || el.textContent || '').trim();
+                                return t.length > 0 && t !== 'Skip to main content';
+                            });
+                        }""",
+                        timeout=15000
+                    )
+                except Exception:
+                    pass
+
                 # Click the correct tab — pick topmost y-position match to avoid
                 # hitting gallery region badges that share the same label text.
                 click_result = page.evaluate(f"""
