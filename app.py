@@ -453,6 +453,8 @@ def capture_creativehub_reports():
                     return out;
                 }""")
                 tab_status.write(f"DEBUG {tab_name}: {debug}")
+                print(f"DEBUG {tab_name}: {debug}", flush=True)
+                st.write(f"DEBUG {tab_name}: {debug}")
                 
                 clip_height = debug.get('galleryRect', {}).get('bottom', 2000) + 24 if debug.get('galleryRect') else 2000
 
