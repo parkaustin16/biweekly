@@ -487,19 +487,12 @@ def capture_creativehub_reports():
                         ? Math.round(gallery.getBoundingClientRect().bottom) + 24
                         : document.documentElement.scrollHeight;
 
-                    // Find the panel's left edge so we can crop it out precisely.
+                    // Find the panel's left edge — the Close menu button's direct
+                    // parent is the 172px panel div per the page's HTML structure.
                     let panelLeft = window.innerWidth;
                     const btn = document.querySelector('[aria-label="Close menu"]');
-                    if (btn) {
-                        let el = btn;
-                        while (el && el !== document.body) {
-                            const styleAttr = el.getAttribute('style') || '';
-                            if (styleAttr.includes('172px')) {
-                                panelLeft = Math.round(el.getBoundingClientRect().left);
-                                break;
-                            }
-                            el = el.parentElement;
-                        }
+                    if (btn && btn.parentElement) {
+                        panelLeft = Math.round(btn.parentElement.getBoundingClientRect().left);
                     }
                     return {startY, endY, panelLeft};
                 }""")
