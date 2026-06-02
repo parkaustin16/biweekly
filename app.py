@@ -404,9 +404,7 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # Step 1: find and scroll the inner scrollable container to
-                # trigger lazy image loading (the page uses height:100vh overflow:auto,
-                # so window.scroll does nothing — must scroll the container directly).
+                # Step 1: find the inner scroller and scroll to bottom to load lazy images
                 page.evaluate("""() => {
                     const scroller = Array.from(document.querySelectorAll('*')).find(el => {
                         if (el === document.body || el === document.documentElement) return false;
@@ -421,7 +419,7 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 2: force all images eager now that they've been scrolled into view
+                # Step 2: force all images eager now everything has been scrolled past
                 page.evaluate("""() => {
                     document.querySelectorAll('img').forEach(img => {
                         img.loading = 'eager';
@@ -431,48 +429,41 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 3: reset scroll, expand the container so content flows naturally
-                page.evaluate("""() => {
+                # Step 3: with scroller back at scrollTop=0, gallery.getBoundingClientRect()
+                # gives its position WITHIN the scroller content correctly.
+                # We set the scroller height to EXACTLY gallery-bottom, then set the
+                # viewport to scroller-top + that height. No expansion guessing needed.
+                clip_height = page.evaluate("""() => {
                     const scroller = window.__ch_scroller;
-                    if (scroller) {
+                    const gallery = document.querySelector('section#gallery');
+
+                    if (scroller && gallery) {
                         scroller.scrollTop = 0;
-                        scroller.style.height = 'auto';
+                        const scrollerTop = scroller.getBoundingClientRect().top;
+                        // gallery bottom relative to scroller top = height scroller must be
+                        const galleryBottomRelScroller =
+                            gallery.getBoundingClientRect().bottom - scrollerTop;
+                        const newH = Math.round(galleryBottomRelScroller) + 24;
+                        scroller.style.height = newH + 'px';
                         scroller.style.maxHeight = 'none';
                         scroller.style.overflow = 'visible';
+                        document.body.style.overflow = 'visible';
+                        document.body.style.height = 'auto';
+                        document.documentElement.style.overflow = 'visible';
+                        document.documentElement.style.height = 'auto';
+                        return Math.round(scrollerTop) + newH;
                     }
-                    document.body.style.overflow = 'visible';
-                    document.body.style.height = 'auto';
-                    document.documentElement.style.overflow = 'visible';
-                    document.documentElement.style.height = 'auto';
-                }""")
-                page.wait_for_timeout(800)  # wait for reflow
-
-                # Step 4: measure exactly where section#gallery ends.
-                # getBoundingClientRect() is relative to the viewport; with
-                # window.scrollY=0 after reset, r.bottom is the page coordinate.
-                clip_height = page.evaluate("""() => {
-                    const gallery = document.querySelector('section#gallery');
+                    // fallback: no inner scroller detected
                     if (gallery) {
                         const r = gallery.getBoundingClientRect();
                         return Math.round(r.bottom + window.scrollY) + 24;
                     }
-                    for (const h of document.querySelectorAll('h2,h3,h4')) {
-                        if (h.textContent.includes('Completed Gallery')) {
-                            const s = h.closest('section') || h.parentElement;
-                            if (s) {
-                                const r = s.getBoundingClientRect();
-                                return Math.round(r.bottom + window.scrollY) + 24;
-                            }
-                        }
-                    }
                     return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
                 }""")
-
-                # Step 5: resize viewport to exactly clip_height, then take a plain
-                # screenshot. No full_page, no clip — the viewport IS the capture area.
-                page.set_viewport_size({'width': 1920, 'height': int(clip_height)})
                 page.wait_for_timeout(300)
 
+                page.set_viewport_size({'width': 1920, 'height': int(clip_height)})
+                page.wait_for_timeout(300)
                 page.screenshot(path=filename, type="jpeg", quality=85)
 
                 future = upload_executor.submit(
