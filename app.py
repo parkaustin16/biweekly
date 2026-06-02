@@ -399,18 +399,30 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Find the bottom of the Completed Gallery section and clip to it.
-                # Falls back to full page height if the element isn't found.
+                # Clip to the bottom of the last card in the Completed Gallery.
+                # Using the last card's edge (not the section's) avoids capturing
+                # the section's own bottom padding as empty space.
                 clip_height = page.evaluate("""() => {
-                    const gallery = document.querySelector('section#gallery');
-                    if (gallery) {
-                        const r = gallery.getBoundingClientRect();
-                        return Math.round(r.bottom + window.scrollY) + 40;
+                    // Find the Completed Gallery section by its heading text
+                    let gallerySection = null;
+                    for (const h of document.querySelectorAll('h2, h3, h4')) {
+                        if (h.textContent.trim().includes('Completed Gallery')) {
+                            gallerySection = h.closest('section') || h.parentElement;
+                            break;
+                        }
                     }
-                    return Math.max(
-                        document.body.scrollHeight,
-                        document.documentElement.scrollHeight
-                    );
+                    // Fallback: find by id
+                    if (!gallerySection) {
+                        gallerySection = document.querySelector('section#gallery');
+                    }
+                    if (gallerySection) {
+                        // Use the last gallery card's bottom edge
+                        const cards = Array.from(gallerySection.querySelectorAll('a'));
+                        const target = cards.length ? cards[cards.length - 1] : gallerySection;
+                        const r = target.getBoundingClientRect();
+                        return Math.round(r.bottom + window.scrollY) + 24;
+                    }
+                    return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
                 }""")
 
                 page.screenshot(
