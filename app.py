@@ -433,6 +433,10 @@ def capture_creativehub_reports():
                 debug = page.evaluate("""() => {
                     const scroller = window.__ch_scroller;
                     const gallery = document.querySelector('section#gallery');
+
+                    // Reset scroll to top so getBoundingClientRect is accurate.
+                    if (scroller) scroller.scrollTop = 0;
+
                     const out = {
                         scrollerFound: !!scroller,
                         galleryFound: !!gallery,
