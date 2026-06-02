@@ -2,6 +2,7 @@ import streamlit as st
 import subprocess
 import os
 import io
+import re
 import requests
 import cloudinary
 import cloudinary.uploader
@@ -522,8 +523,11 @@ def sync_creativehub_to_airtable(data_list):
 
     records_to_create = []
     for item in data_list:
+        week_match = re.search(r'(\d{1,2}-\d{1,2})\/?$', item.get('tab_url', ''))
+        week = f"W{week_match.group(1)}" if week_match else ""
+        label = f"{week} | Bi Weekly CreativeHub Report | {item['tab']}" if week else f"Bi Weekly CreativeHub Report | {item['tab']}"
         fields = {
-            "Type": f"CreativeHub Reports | {item['tab']}",
+            "Type": label,
             "Date": item["date"],
             "URL": item["tab_url"],
             "Attachments": [{"url": item["url"]}],
