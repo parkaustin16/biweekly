@@ -496,7 +496,8 @@ def capture_creativehub_reports():
                 img = Image.open(io.BytesIO(png_bytes))
                 top_px = max(0, coords['startY'] * dpr)
                 bot_px = min(img.height, coords['endY'] * dpr)
-                img.crop((0, top_px, img.width, bot_px)).save(filename, "JPEG", quality=85)
+                right_px = img.width - (172 * dpr)  # strip the 172px floating nav panel
+                img.crop((0, top_px, right_px, bot_px)).save(filename, "JPEG", quality=85)
 
                 future = upload_executor.submit(
                     background_upload, filename,
