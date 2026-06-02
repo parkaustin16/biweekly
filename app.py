@@ -460,6 +460,15 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(500)
 
+                # Hide the floating nav panel (Close menu / Filter by Region sidebar).
+                page.evaluate("""() => {
+                    const closeBtn = document.querySelector('[aria-label="Close menu"]');
+                    if (closeBtn) {
+                        const panel = closeBtn.closest('div[style*="172px"]') || closeBtn.parentElement;
+                        if (panel) panel.style.setProperty('display', 'none', 'important');
+                    }
+                }""")
+
                 # Step 4: measure crop bounds after layout has settled.
                 # Use textContent (not innerText) — innerText applies CSS text-transform
                 # so 'uppercase' class would return 'D2C CREATIVE HUB', not matching.
