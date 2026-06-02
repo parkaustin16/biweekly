@@ -404,7 +404,7 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # Step 1: find the inner scroller and scroll to bottom to load lazy images
+                # Step 1: find the inner scroller and scroll to trigger lazy image loading
                 page.evaluate("""() => {
                     const scroller = Array.from(document.querySelectorAll('*')).find(el => {
                         if (el === document.body || el === document.documentElement) return false;
@@ -419,7 +419,7 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 2: force all images eager now everything has been scrolled past
+                # Step 2: force all images eager now that content has been scrolled past
                 page.evaluate("""() => {
                     document.querySelectorAll('img').forEach(img => {
                         img.loading = 'eager';
@@ -429,10 +429,8 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 3: with scroller back at scrollTop=0, gallery.getBoundingClientRect()
-                # gives its position WITHIN the scroller content correctly.
-                # We set the scroller height to EXACTLY gallery-bottom, then set the
-                # viewport to scroller-top + that height. No expansion guessing needed.
+                # Step 3: with scrollTop reset to 0, measure gallery bottom THEN expand
+                # every ancestor container so nothing clips the document height.
                 clip_height = page.evaluate("""() => {
                     const scroller = window.__ch_scroller;
                     const gallery = document.querySelector('section#gallery');
@@ -440,27 +438,46 @@ def capture_creativehub_reports():
                     if (scroller && gallery) {
                         scroller.scrollTop = 0;
                         const scrollerTop = scroller.getBoundingClientRect().top;
-                        // gallery bottom relative to scroller top = height scroller must be
-                        const galleryBottomRelScroller =
+                        // gallery bottom relative to scroller content top (scrollTop=0)
+                        const galleryBottomInScroller =
                             gallery.getBoundingClientRect().bottom - scrollerTop;
-                        const newH = Math.round(galleryBottomRelScroller) + 24;
-                        scroller.style.height = newH + 'px';
+                        const targetH = Math.round(galleryBottomInScroller) + 24;
+
+                        // Set scroller to exactly gallery-bottom height
+                        scroller.style.height = targetH + 'px';
                         scroller.style.maxHeight = 'none';
                         scroller.style.overflow = 'visible';
+
+                        // Walk ALL ancestors and remove every overflow/height constraint
+                        // so none of them clip the now-expanded scroller
+                        let el = scroller.parentElement;
+                        while (el && el !== document.documentElement) {
+                            el.style.overflow = 'visible';
+                            el.style.overflowY = 'visible';
+                            el.style.height = 'auto';
+                            el.style.maxHeight = 'none';
+                            el.style.minHeight = '0';
+                            el = el.parentElement;
+                        }
                         document.body.style.overflow = 'visible';
                         document.body.style.height = 'auto';
+                        document.body.style.maxHeight = 'none';
                         document.documentElement.style.overflow = 'visible';
                         document.documentElement.style.height = 'auto';
-                        return Math.round(scrollerTop) + newH;
+                        document.documentElement.style.maxHeight = 'none';
+
+                        return Math.round(scrollerTop) + targetH;
                     }
-                    // fallback: no inner scroller detected
-                    if (gallery) {
-                        const r = gallery.getBoundingClientRect();
+
+                    // Fallback: no inner scroller found
+                    const gallery2 = document.querySelector('section#gallery');
+                    if (gallery2) {
+                        const r = gallery2.getBoundingClientRect();
                         return Math.round(r.bottom + window.scrollY) + 24;
                     }
                     return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
                 }""")
-                page.wait_for_timeout(300)
+                page.wait_for_timeout(400)
 
                 page.set_viewport_size({'width': 1920, 'height': int(clip_height)})
                 page.wait_for_timeout(300)
