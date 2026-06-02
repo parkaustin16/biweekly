@@ -399,7 +399,26 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                page.screenshot(path=filename, full_page=True, type="jpeg", quality=85)
+                # Find the bottom of the Completed Gallery section and clip to it.
+                # Falls back to full page height if the element isn't found.
+                clip_height = page.evaluate("""() => {
+                    const gallery = document.querySelector('section#gallery');
+                    if (gallery) {
+                        const r = gallery.getBoundingClientRect();
+                        return Math.round(r.bottom + window.scrollY) + 40;
+                    }
+                    return Math.max(
+                        document.body.scrollHeight,
+                        document.documentElement.scrollHeight
+                    );
+                }""")
+
+                page.screenshot(
+                    path=filename,
+                    clip={"x": 0, "y": 0, "width": 1920, "height": clip_height},
+                    type="jpeg",
+                    quality=85
+                )
 
                 future = upload_executor.submit(
                     background_upload, filename,
