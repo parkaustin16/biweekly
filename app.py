@@ -486,15 +486,7 @@ def capture_creativehub_reports():
                     const endY = gallery
                         ? Math.round(gallery.getBoundingClientRect().bottom) + 24
                         : document.documentElement.scrollHeight;
-
-                    // Find the panel's left edge — the Close menu button's direct
-                    // parent is the 172px panel div per the page's HTML structure.
-                    let panelLeft = window.innerWidth;
-                    const btn = document.querySelector('[aria-label="Close menu"]');
-                    if (btn && btn.parentElement) {
-                        panelLeft = Math.round(btn.parentElement.getBoundingClientRect().left);
-                    }
-                    return {startY, endY, panelLeft};
+                    return {startY, endY};
                 }""")
 
                 # Step 5: full_page PNG captures all content regardless of viewport,
@@ -504,15 +496,9 @@ def capture_creativehub_reports():
                 img = Image.open(io.BytesIO(png_bytes))
                 top_px = max(0, coords['startY'] * dpr)
                 bot_px = min(img.height, coords['endY'] * dpr)
-                panel_left = coords['panelLeft']
-                # If detection failed, panelLeft == window.innerWidth (1920).
-                # Only trust it when it's clearly inside the page (not the default).
-                if 100 < panel_left < 1900:
-                    right_px = panel_left * dpr
-                else:
-                    # Fallback: crop 210px off the right (panel is 172px + ~20px gap from edge)
-                    right_px = img.width - (210 * dpr)
-                st.write(f"DEBUG img {img.width}×{img.height} | panelLeft={panel_left} | right_px={right_px} | top={top_px} bot={bot_px}")
+                # Panel is position:fixed; right:20px; width:172px — left edge is always
+                # viewport_width - 20 - 172 = 1728 CSS px = 3456 retina px.
+                right_px = img.width - ((20 + 172) * dpr)
                 img.crop((0, top_px, right_px, bot_px)).save(filename, "JPEG", quality=85)
 
                 future = upload_executor.submit(
