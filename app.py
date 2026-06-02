@@ -306,7 +306,7 @@ def capture_creativehub_reports():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
+            viewport={'width': 1920, 'height': 4000},
             device_scale_factor=2
         )
         page = context.new_page()
@@ -404,22 +404,9 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # Step 1: find the inner scroller and scroll to trigger lazy image loading
-                page.evaluate("""() => {
-                    const scroller = Array.from(document.querySelectorAll('*')).find(el => {
-                        if (el === document.body || el === document.documentElement) return false;
-                        const s = window.getComputedStyle(el);
-                        return (s.overflowY === 'scroll' || s.overflowY === 'auto')
-                            && el.scrollHeight > el.clientHeight + 100;
-                    });
-                    if (scroller) {
-                        scroller.scrollTop = scroller.scrollHeight;
-                        window.__ch_scroller = scroller;
-                    }
-                }""")
-                page.wait_for_timeout(800)
-
-                # Step 2: force all images eager
+                # Viewport is already 4000px — the 100vh inner scroller is fully
+                # expanded, so all content is visible without scrolling.
+                # Force lazy images to load.
                 page.evaluate("""() => {
                     document.querySelectorAll('img').forEach(img => {
                         img.loading = 'eager';
@@ -427,30 +414,27 @@ def capture_creativehub_reports():
                         if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
                     });
                 }""")
+
+                # Wait until section#gallery is actually in the DOM, then settle.
+                try:
+                    page.wait_for_selector('section#gallery', timeout=10000)
+                except Exception:
+                    pass
                 page.wait_for_timeout(800)
 
-                # Step 3: expand viewport so the 100vh scroller grows to show all
-                # content without scrolling — makes getBoundingClientRect accurate.
-                page.set_viewport_size({'width': 1920, 'height': 4000})
-                page.wait_for_timeout(600)
-
-                # Step 4: measure where section#gallery ends in the expanded viewport.
-                # With scrollTop=0 (nothing to scroll at 4000px), bottom is exact.
+                # Measure gallery bottom — getBoundingClientRect is accurate because
+                # scrollTop is 0 (nothing to scroll at 4000px viewport).
                 clip_height = page.evaluate("""() => {
                     const gallery = document.querySelector('section#gallery');
-                    if (!gallery) return 4000;
+                    if (!gallery) return 2000;
                     return Math.round(gallery.getBoundingClientRect().bottom) + 24;
                 }""")
 
-                # Step 5: screenshot clipped precisely at gallery bottom.
-                # No DOM style changes — Playwright's clip does the cropping.
+                # Clip screenshot exactly at gallery bottom — no DOM manipulation.
                 page.screenshot(
                     path=filename, type="jpeg", quality=85,
                     clip={'x': 0, 'y': 0, 'width': 1920, 'height': int(clip_height)}
                 )
-
-                # Reset viewport for next tab's scroller detection (needs 100vh < scrollHeight).
-                page.set_viewport_size({'width': 1920, 'height': 1080})
 
                 future = upload_executor.submit(
                     background_upload, filename,
