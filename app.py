@@ -1,6 +1,7 @@
 import streamlit as st
 import subprocess
 import os
+import io
 import requests
 import cloudinary
 import cloudinary.uploader
@@ -8,6 +9,7 @@ import base64
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 from concurrent.futures import ThreadPoolExecutor
+from PIL import Image
 
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
@@ -429,56 +431,60 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 3: collect debug info and compute clip height
-                debug = page.evaluate("""() => {
+                # Step 3: unlock the scroller so the full content height is
+                # reachable by full_page screenshot (no viewport resize needed).
+                page.evaluate("""() => {
                     const scroller = window.__ch_scroller;
-                    const gallery = document.querySelector('section#gallery');
-
-                    // Reset scroll to top so getBoundingClientRect is accurate.
-                    if (scroller) scroller.scrollTop = 0;
-
-                    const out = {
-                        scrollerFound: !!scroller,
-                        galleryFound: !!gallery,
-                        viewportH: window.innerHeight,
-                        scrollerTag: scroller ? scroller.tagName : null,
-                        scrollerClass: scroller ? scroller.className.slice(0,80) : null,
-                        scrollerClientH: scroller ? scroller.clientHeight : null,
-                        scrollerScrollH: scroller ? scroller.scrollHeight : null,
-                        galleryRect: gallery ? {
-                            top: Math.round(gallery.getBoundingClientRect().top),
-                            bottom: Math.round(gallery.getBoundingClientRect().bottom),
-                            height: Math.round(gallery.getBoundingClientRect().height),
-                        } : null,
-                        galleryScrollH: gallery ? gallery.scrollHeight : null,
-                        bodyScrollH: document.body.scrollHeight,
-                        docScrollH: document.documentElement.scrollHeight,
-                        startY: (() => {
-                            const all = document.querySelectorAll('p');
-                            for (const p of all) {
-                                if ((p.innerText || p.textContent || '').trim() === 'D2C Creative Hub') {
-                                    return Math.round(p.getBoundingClientRect().top);
-                                }
-                            }
-                            return 0;
-                        })(),
-                    };
-                    return out;
+                    if (scroller) {
+                        scroller.scrollTop = 0;
+                        scroller.style.setProperty('overflow', 'visible', 'important');
+                        scroller.style.setProperty('overflow-y', 'visible', 'important');
+                        scroller.style.setProperty('height', 'auto', 'important');
+                        scroller.style.setProperty('max-height', 'none', 'important');
+                        scroller.style.setProperty('min-height', '0', 'important');
+                        let el = scroller.parentElement;
+                        while (el && el !== document.documentElement) {
+                            el.style.setProperty('height', 'auto', 'important');
+                            el.style.setProperty('max-height', 'none', 'important');
+                            el.style.setProperty('overflow', 'visible', 'important');
+                            el = el.parentElement;
+                        }
+                    }
+                    document.body.style.setProperty('height', 'auto', 'important');
+                    document.body.style.setProperty('max-height', 'none', 'important');
+                    document.body.style.setProperty('overflow', 'visible', 'important');
+                    document.documentElement.style.setProperty('height', 'auto', 'important');
+                    document.documentElement.style.setProperty('max-height', 'none', 'important');
+                    document.documentElement.style.setProperty('overflow', 'visible', 'important');
                 }""")
-                tab_status.write(f"DEBUG {tab_name}: {debug}")
-                print(f"DEBUG {tab_name}: {debug}", flush=True)
-                st.write(f"DEBUG {tab_name}: {debug}")
-                
-                clip_height = debug.get('galleryRect', {}).get('bottom', 2000) + 24 if debug.get('galleryRect') else 2000
-                start_y = debug.get('startY', 0)
+                page.wait_for_timeout(500)
 
-                page.set_viewport_size({'width': 1920, 'height': int(clip_height)})
-                page.wait_for_timeout(300)
-                page.screenshot(
-                    path=filename, type="jpeg", quality=85,
-                    clip={'x': 0, 'y': start_y, 'width': 1920, 'height': int(clip_height) - start_y}
-                )
-                page.set_viewport_size({'width': 1920, 'height': 1080})
+                # Step 4: measure crop bounds after layout has settled.
+                # Use textContent (not innerText) — innerText applies CSS text-transform
+                # so 'uppercase' class would return 'D2C CREATIVE HUB', not matching.
+                coords = page.evaluate("""() => {
+                    const gallery = document.querySelector('section#gallery');
+                    let startY = 0;
+                    for (const p of document.querySelectorAll('p')) {
+                        if ((p.textContent || '').trim() === 'D2C Creative Hub') {
+                            startY = Math.max(0, Math.round(p.getBoundingClientRect().top));
+                            break;
+                        }
+                    }
+                    const endY = gallery
+                        ? Math.round(gallery.getBoundingClientRect().bottom) + 24
+                        : document.documentElement.scrollHeight;
+                    return {startY, endY};
+                }""")
+
+                # Step 5: full_page PNG captures all content regardless of viewport,
+                # then Pillow crops precisely to [startY, endY].
+                dpr = 2  # device_scale_factor
+                png_bytes = page.screenshot(full_page=True, type="png")
+                img = Image.open(io.BytesIO(png_bytes))
+                top_px = max(0, coords['startY'] * dpr)
+                bot_px = min(img.height, coords['endY'] * dpr)
+                img.crop((0, top_px, img.width, bot_px)).save(filename, "JPEG", quality=85)
 
                 future = upload_executor.submit(
                     background_upload, filename,
