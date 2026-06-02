@@ -306,7 +306,7 @@ def capture_creativehub_reports():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            viewport={'width': 1920, 'height': 4000},
+            viewport={'width': 1920, 'height': 1080},
             device_scale_factor=2
         )
         page = context.new_page()
@@ -404,9 +404,22 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # Viewport is already 4000px — the 100vh inner scroller is fully
-                # expanded, so all content is visible without scrolling.
-                # Force lazy images to load.
+                # Step 1: find the inner scroller and scroll to trigger lazy image loading
+                page.evaluate("""() => {
+                    const scroller = Array.from(document.querySelectorAll('*')).find(el => {
+                        if (el === document.body || el === document.documentElement) return false;
+                        const s = window.getComputedStyle(el);
+                        return (s.overflowY === 'scroll' || s.overflowY === 'auto')
+                            && el.scrollHeight > el.clientHeight + 100;
+                    });
+                    if (scroller) {
+                        window.__ch_scroller = scroller;
+                        scroller.scrollTop = scroller.scrollHeight;
+                    }
+                }""")
+                page.wait_for_timeout(800)
+
+                # Step 2: force all images eager
                 page.evaluate("""() => {
                     document.querySelectorAll('img').forEach(img => {
                         img.loading = 'eager';
@@ -414,27 +427,72 @@ def capture_creativehub_reports():
                         if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
                     });
                 }""")
-
-                # Wait until section#gallery is actually in the DOM, then settle.
-                try:
-                    page.wait_for_selector('section#gallery', timeout=10000)
-                except Exception:
-                    pass
                 page.wait_for_timeout(800)
 
-                # Measure gallery bottom — getBoundingClientRect is accurate because
-                # scrollTop is 0 (nothing to scroll at 4000px viewport).
-                clip_height = page.evaluate("""() => {
+                # Step 3: measure gallery's TRUE content height (ignoring any
+                # min-height:100vh or other viewport-relative CSS), pin the scroller
+                # via inline style to that height, then expand the viewport to match.
+                # Inline styles beat CSS rules, so scroller stays pinned even after
+                # the viewport changes.
+                result = page.evaluate("""() => {
+                    const scroller = window.__ch_scroller;
                     const gallery = document.querySelector('section#gallery');
-                    if (!gallery) return 2000;
-                    return Math.round(gallery.getBoundingClientRect().bottom) + 24;
+                    if (!scroller || !gallery) {
+                        return {scrollerTop: 0, targetH: Math.max(document.body.scrollHeight, 2000)};
+                    }
+
+                    // Strip viewport-relative constraints so gallery shrinks to content.
+                    gallery.style.minHeight = '0';
+                    gallery.style.height = 'auto';
+                    gallery.style.maxHeight = 'none';
+
+                    scroller.scrollTop = 0;
+                    const scrollerTop = Math.round(scroller.getBoundingClientRect().top);
+
+                    // Walk up from gallery to scroller to get gallery's offset
+                    // within the scroller (scroll-position-independent).
+                    let offsetFromScroller = 0;
+                    let el = gallery;
+                    while (el && el !== scroller) {
+                        offsetFromScroller += el.offsetTop;
+                        el = el.offsetParent;
+                    }
+
+                    // gallery.scrollHeight = actual card content after removing CSS constraints.
+                    const targetH = offsetFromScroller + gallery.scrollHeight + 24;
+
+                    // Pin scroller height via inline style (overrides height:100vh).
+                    scroller.style.height = targetH + 'px';
+                    scroller.style.maxHeight = 'none';
+                    scroller.style.overflow = 'hidden'; // hard-clip below gallery
+
+                    // Let ancestors grow to fit the now-taller scroller.
+                    let ancestor = scroller.parentElement;
+                    while (ancestor && ancestor !== document.documentElement) {
+                        ancestor.style.height = 'auto';
+                        ancestor.style.maxHeight = 'none';
+                        ancestor.style.minHeight = '0';
+                        ancestor = ancestor.parentElement;
+                    }
+                    document.body.style.height = 'auto';
+                    document.body.style.maxHeight = 'none';
+                    document.body.style.minHeight = '0';
+                    document.documentElement.style.height = 'auto';
+                    document.documentElement.style.maxHeight = 'none';
+                    document.documentElement.style.minHeight = '0';
+
+                    return {scrollerTop, targetH};
                 }""")
 
-                # Clip screenshot exactly at gallery bottom — no DOM manipulation.
-                page.screenshot(
-                    path=filename, type="jpeg", quality=85,
-                    clip={'x': 0, 'y': 0, 'width': 1920, 'height': int(clip_height)}
-                )
+                # Viewport exactly equals content height — no empty space because
+                # the background fills exactly to the viewport edge.
+                clip_h = result['scrollerTop'] + result['targetH']
+                page.set_viewport_size({'width': 1920, 'height': int(clip_h)})
+                page.wait_for_timeout(400)
+                page.screenshot(path=filename, type="jpeg", quality=85)
+
+                # Reset for next tab (scroller detection needs 100vh < scrollHeight).
+                page.set_viewport_size({'width': 1920, 'height': 1080})
 
                 future = upload_executor.submit(
                     background_upload, filename,
