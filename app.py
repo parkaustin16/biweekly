@@ -404,9 +404,9 @@ def capture_creativehub_reports():
                 safe_tab = tab_name.replace(' ', '-')
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
-                # Step 1: Scroll the inner scrollable container to trigger lazy loads.
-                # The page uses a fixed-height inner div (height:100vh, overflow:auto)
-                # so window.scrollTo does nothing — we must scroll the container itself.
+                # Step 1: find and scroll the inner scrollable container to
+                # trigger lazy image loading (the page uses height:100vh overflow:auto,
+                # so window.scroll does nothing — must scroll the container directly).
                 page.evaluate("""() => {
                     const scroller = Array.from(document.querySelectorAll('*')).find(el => {
                         if (el === document.body || el === document.documentElement) return false;
@@ -415,14 +415,13 @@ def capture_creativehub_reports():
                             && el.scrollHeight > el.clientHeight + 100;
                     });
                     if (scroller) {
-                        // Scroll to bottom to trigger lazy loaders, then back to top
                         scroller.scrollTop = scroller.scrollHeight;
                         window.__ch_scroller = scroller;
                     }
                 }""")
-                page.wait_for_timeout(600)
+                page.wait_for_timeout(800)
 
-                # Step 2: Force all lazy images eager
+                # Step 2: force all images eager now that they've been scrolled into view
                 page.evaluate("""() => {
                     document.querySelectorAll('img').forEach(img => {
                         img.loading = 'eager';
@@ -430,33 +429,33 @@ def capture_creativehub_reports():
                         if (img.dataset.lazySrc) img.src = img.dataset.lazySrc;
                     });
                 }""")
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(800)
 
-                # Step 3: Expand the inner container so body.scrollHeight reflects
-                # full content height (removes height:100vh and overflow clipping)
+                # Step 3: reset scroll, expand the container so content flows naturally
                 page.evaluate("""() => {
                     const scroller = window.__ch_scroller;
                     if (scroller) {
+                        scroller.scrollTop = 0;
                         scroller.style.height = 'auto';
                         scroller.style.maxHeight = 'none';
                         scroller.style.overflow = 'visible';
-                        scroller.scrollTop = 0;
                     }
                     document.body.style.overflow = 'visible';
                     document.body.style.height = 'auto';
                     document.documentElement.style.overflow = 'visible';
                     document.documentElement.style.height = 'auto';
                 }""")
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(800)  # wait for reflow
 
-                # Step 4: Clip to the bottom of section#gallery (the Completed Gallery).
+                # Step 4: measure exactly where section#gallery ends.
+                # getBoundingClientRect() is relative to the viewport; with
+                # window.scrollY=0 after reset, r.bottom is the page coordinate.
                 clip_height = page.evaluate("""() => {
                     const gallery = document.querySelector('section#gallery');
                     if (gallery) {
                         const r = gallery.getBoundingClientRect();
                         return Math.round(r.bottom + window.scrollY) + 24;
                     }
-                    // fallback: find by heading text
                     for (const h of document.querySelectorAll('h2,h3,h4')) {
                         if (h.textContent.includes('Completed Gallery')) {
                             const s = h.closest('section') || h.parentElement;
@@ -469,13 +468,12 @@ def capture_creativehub_reports():
                     return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
                 }""")
 
-                page.screenshot(
-                    path=filename,
-                    full_page=True,
-                    clip={"x": 0, "y": 0, "width": 1920, "height": int(clip_height)},
-                    type="jpeg",
-                    quality=85
-                )
+                # Step 5: resize viewport to exactly clip_height, then take a plain
+                # screenshot. No full_page, no clip — the viewport IS the capture area.
+                page.set_viewport_size({'width': 1920, 'height': int(clip_height)})
+                page.wait_for_timeout(300)
+
+                page.screenshot(path=filename, type="jpeg", quality=85)
 
                 future = upload_executor.submit(
                     background_upload, filename,
