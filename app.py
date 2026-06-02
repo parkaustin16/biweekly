@@ -460,13 +460,13 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(500)
 
-                # Hide the floating nav panel (Close menu / Filter by Region sidebar).
+                # Hide the floating nav panel (width:172px sidebar with Close menu button).
                 page.evaluate("""() => {
-                    const closeBtn = document.querySelector('[aria-label="Close menu"]');
-                    if (closeBtn) {
-                        const panel = closeBtn.closest('div[style*="172px"]') || closeBtn.parentElement;
-                        if (panel) panel.style.setProperty('display', 'none', 'important');
-                    }
+                    document.querySelectorAll('div').forEach(d => {
+                        if (d.style.width === '172px') {
+                            d.style.setProperty('display', 'none', 'important');
+                        }
+                    });
                 }""")
 
                 # Step 4: measure crop bounds after layout has settled.
