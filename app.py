@@ -419,7 +419,7 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 2: force all images eager now that content has been scrolled past
+                # Step 2: force all images eager
                 page.evaluate("""() => {
                     document.querySelectorAll('img').forEach(img => {
                         img.loading = 'eager';
@@ -429,8 +429,9 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 3: with scrollTop reset to 0, measure gallery bottom THEN expand
-                # every ancestor container so nothing clips the document height.
+                # Step 3: measure gallery bottom, then size the scroller to exactly
+                # that height. Keep scroller overflow as-is (clips below gallery).
+                # Only set height:auto on ancestors so they expand to fit the scroller.
                 clip_height = page.evaluate("""() => {
                     const scroller = window.__ch_scroller;
                     const gallery = document.querySelector('section#gallery');
@@ -438,41 +439,38 @@ def capture_creativehub_reports():
                     if (scroller && gallery) {
                         scroller.scrollTop = 0;
                         const scrollerTop = scroller.getBoundingClientRect().top;
-                        // gallery bottom relative to scroller content top (scrollTop=0)
-                        const galleryBottomInScroller =
+                        // gallery bottom relative to scroller top when scrollTop=0
+                        const galleryBottom =
                             gallery.getBoundingClientRect().bottom - scrollerTop;
-                        const targetH = Math.round(galleryBottomInScroller) + 24;
+                        const targetH = Math.round(galleryBottom) + 24;
 
-                        // Set scroller to exactly gallery-bottom height
+                        // Resize scroller to gallery-bottom height.
+                        // Do NOT change overflow — keep it clipping content below gallery.
                         scroller.style.height = targetH + 'px';
                         scroller.style.maxHeight = 'none';
-                        scroller.style.overflow = 'visible';
 
-                        // Walk ALL ancestors and remove every overflow/height constraint
-                        // so none of them clip the now-expanded scroller
+                        // Walk every ancestor: height:auto so they expand to fit,
+                        // but leave overflow alone so nothing extra bleeds through.
                         let el = scroller.parentElement;
                         while (el && el !== document.documentElement) {
-                            el.style.overflow = 'visible';
-                            el.style.overflowY = 'visible';
                             el.style.height = 'auto';
                             el.style.maxHeight = 'none';
                             el.style.minHeight = '0';
                             el = el.parentElement;
                         }
-                        document.body.style.overflow = 'visible';
                         document.body.style.height = 'auto';
                         document.body.style.maxHeight = 'none';
-                        document.documentElement.style.overflow = 'visible';
+                        document.body.style.minHeight = '0';
                         document.documentElement.style.height = 'auto';
                         document.documentElement.style.maxHeight = 'none';
+                        document.documentElement.style.minHeight = '0';
 
                         return Math.round(scrollerTop) + targetH;
                     }
 
-                    // Fallback: no inner scroller found
-                    const gallery2 = document.querySelector('section#gallery');
-                    if (gallery2) {
-                        const r = gallery2.getBoundingClientRect();
+                    // Fallback: no inner scroller
+                    if (gallery) {
+                        const r = gallery.getBoundingClientRect();
                         return Math.round(r.bottom + window.scrollY) + 24;
                     }
                     return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
