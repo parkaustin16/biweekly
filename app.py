@@ -408,26 +408,21 @@ def capture_creativehub_reports():
                 filename = f"ch-{safe_tab}-{safe_date}.jpg"
 
                 # Extract the active week label from the highlighted week button.
-                # The selected pill has a red/dark background and text like "W23-W24".
                 week_label = page.evaluate("""() => {
-                    // Try URL first (SPA may update it)
                     const urlMatch = window.location.pathname.match(/(\\d{1,2}-\\d{1,2})\\/?$/);
                     if (urlMatch) return 'W' + urlMatch[1];
-                    // Fall back to the visually-selected week button
                     const btns = Array.from(document.querySelectorAll('button, a'));
                     for (const btn of btns) {
                         const txt = (btn.textContent || '').trim();
                         if (/^W\\d{1,2}-W\\d{1,2}$/.test(txt)) {
-                            const style = window.getComputedStyle(btn);
-                            const bg = style.backgroundColor;
-                            // Selected pill has a non-transparent/non-white background
+                            const bg = window.getComputedStyle(btn).backgroundColor;
                             if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'rgb(255, 255, 255)') {
                                 return txt;
                             }
                         }
                     }
                     return '';
-                """)
+                }""")
 
                 # Step 1: find the inner scroller and scroll to trigger lazy image loading
                 page.evaluate("""() => {
