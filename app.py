@@ -114,12 +114,25 @@ def capture_regional_images(target_url):
             img_counter = 1
             
             try:
-                # 1. Click the tab
-                tab = page.locator(f'div[role="tab"]:has-text("{region}")')
-                tab.click()
-                
+                # 1. Click the tab via JS to bypass pointer interception
+                click_result = page.evaluate(f"""
+                    () => {{
+                        const tabs = Array.from(document.querySelectorAll('div[role="tab"]'));
+                        const exact = tabs.find(t => t.textContent.trim() === '{region}');
+                        if (exact) {{ exact.click(); return 'exact:' + exact.textContent.trim(); }}
+                        const fuzzy = tabs.find(t => t.textContent.trim().includes('{region}'));
+                        if (fuzzy) {{ fuzzy.click(); return 'fuzzy:' + fuzzy.textContent.trim(); }}
+                        return 'not_found:' + tabs.map(t => t.textContent.trim()).join('|');
+                    }}
+                """)
+                if click_result.startswith('not_found:'):
+                    raise Exception(f"Tab not found. Available: {click_result}")
+
                 # 2. Wait for content to load
-                page.wait_for_function("() => document.querySelector('.loading-spinner') === null")
+                try:
+                    page.wait_for_function("() => document.querySelector('.loading-spinner') === null", timeout=5000)
+                except Exception:
+                    pass
                 page.wait_for_timeout(800)
 
                 specific_tab_url = page.url
