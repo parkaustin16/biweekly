@@ -52,7 +52,7 @@ def background_upload(file_path, public_id):
     return cloudinary.uploader.upload(file_path, folder="airtableautomation", public_id=public_id)
 
 def capture_regional_images(target_url):
-    regions = ["Asia", "Europe", "LATAM", "Canada", "MEA", "All Regions"]
+    regions = ["Asia", "EU", "LATAM", "Canada", "MEA", "All Regions"]
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
     header_title_clean = "Report"
