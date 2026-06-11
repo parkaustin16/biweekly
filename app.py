@@ -68,23 +68,9 @@ def capture_regional_images(target_url):
         
         connection_status = st.empty()
         connection_status.info("🔗 Connecting to Airtable Interface...")
-
-        page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-        # Give the Airtable React app time to hydrate before looking for tabs
-        try:
-            page.wait_for_load_state("networkidle", timeout=20000)
-        except Exception:
-            pass  # networkidle may never fire on SPAs; proceed anyway
-        try:
-            page.wait_for_selector('div[role="tab"]', timeout=30000)
-        except Exception as tab_err:
-            debug_path = "debug-no-tabs.jpg"
-            page.screenshot(path=debug_path, full_page=True, type="jpeg", quality=80)
-            debug_b64 = get_base64_image(debug_path)
-            st.error(f"Could not find tabs on the page. Page snapshot below.")
-            st.markdown(f'<img src="data:image/jpeg;base64,{debug_b64}" style="width:100%"/>', unsafe_allow_html=True)
-            browser.close()
-            return []
+        
+        page.goto(target_url, wait_until="commit")
+        page.wait_for_selector('div[role="tab"]', timeout=15000)
         
         connection_status.success("✅ Connected to Airtable Interface")
         
@@ -128,75 +114,73 @@ def capture_regional_images(target_url):
             img_counter = 1
             
             try:
-                # 1. Click the tab via JS to bypass actionability/scroll issues
-                # Exact match first, then substring fallback
-                click_result = page.evaluate(f"""
-                    () => {{
-                        const tabs = Array.from(document.querySelectorAll('div[role="tab"]'));
-                        const exact = tabs.find(t => t.textContent.trim() === '{region}');
-                        if (exact) {{ exact.click(); return 'exact:' + exact.textContent.trim(); }}
-                        const fuzzy = tabs.find(t => t.textContent.trim().includes('{region}'));
-                        if (fuzzy) {{ fuzzy.click(); return 'fuzzy:' + fuzzy.textContent.trim(); }}
-                        return 'not_found:' + tabs.map(t => t.textContent.trim()).join('|');
-                    }}
-                """)
-                if click_result.startswith('not_found:'):
-                    available = click_result.replace('not_found:', '')
-                    raise Exception(f"Tab not found. Available tabs: [{available}]")
-                status_placeholder.write(f"🔄 **{region}**: Tab clicked ({click_result}), waiting...")
+                # 1. Click the tab
+                tab = page.locator(f'div[role="tab"]:has-text("{region}")')
+                tab.click()
+                
+                # 2. Wait for content to load
+                page.wait_for_function("() => document.querySelector('.loading-spinner') === null")
+                page.wait_for_timeout(800)
 
-                # 2. Wait for content to settle
-                try:
-                    page.wait_for_function("() => document.querySelector('.loading-spinner') === null", timeout=5000)
-                except Exception:
-                    pass
-                page.wait_for_timeout(1200)
-
-                # --- CAPTURE SPECIFIC TAB URL ---
                 specific_tab_url = page.url
+
+                layout_info = page.evaluate("""
+                    () => {
+                        const titleEl = document.querySelector('h2.font-family-display-updated, h1, .interfaceTitle');
+                        const metricsGrid = document.querySelector('[data-testid="page-element:bigNumber"]')?.closest('[data-testid="gridRowSection"]');
+                        const chartsSection = document.querySelector('[data-testid="page-element:chart"]')?.closest('[data-testid="gridRowSection"]');
+
+                        const getRect = (el) => {
+                            if (!el) return null;
+                            const r = el.getBoundingClientRect();
+                            return { x: r.left, y: r.top + window.scrollY, width: r.width, height: r.height };
+                        };
+
+                        const titleRect = getRect(titleEl);
+                        const metricsRect = getRect(metricsGrid);
+                        const chartsRect = getRect(chartsSection);
+
+                        const startY = titleRect ? titleRect.y : 0;
+                        const metricsBottom = metricsRect ? (metricsRect.y + metricsRect.height + 20) : 600;
+                        
+                        const headerClip = {
+                            x: 0, y: Math.floor(startY), width: 1920, height: Math.floor(metricsBottom - startY)
+                        };
+
+                        let contentClip = null;
+                        if (chartsRect) {
+                            const charts = chartsSection.querySelectorAll('[data-testid="page-element:chart"]');
+                            let maxBottom = chartsRect.y + chartsRect.height;
+                            if (charts.length > 0) {
+                                const bottoms = Array.from(charts).map(el => el.getBoundingClientRect().bottom + window.scrollY);
+                                maxBottom = Math.max(...bottoms) + 27; 
+                            }
+                            contentClip = {
+                                x: 0, y: Math.floor(chartsRect.y - 10), width: 1920, height: Math.floor(maxBottom - chartsRect.y)
+                            };
+                        } else {
+                            contentClip = { x: 0, y: 650, width: 1920, height: 1000 };
+                        }
+                        return { headerClip, contentClip };
+                    }
+                """)
 
                 safe_region = region.replace(' ', '-')
                 safe_date = capture_date.replace('-', '')
                 filename_week = week_id.replace(" ", "-")
 
-                # Force lazy images to load, scroll to trigger remaining content
-                page.evaluate("""
-                    () => {
-                        document.querySelectorAll('img[loading="lazy"]').forEach(img => {
-                            img.loading = 'eager';
-                            if (img.dataset.src) img.src = img.dataset.src;
-                        });
-                    }
-                """)
-                total_height = page.evaluate("document.body.scrollHeight")
-                pos = 0
-                while pos < total_height:
-                    page.evaluate(f"window.scrollTo(0, {pos})")
-                    page.wait_for_timeout(120)
-                    pos += 800
-                    total_height = page.evaluate("document.body.scrollHeight")
-                page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(500)
-
-                # Resize viewport to full content height before screenshotting
-                full_height = page.evaluate("document.body.scrollHeight")
-                page.set_viewport_size({'width': 1920, 'height': min(full_height + 100, 20000)})
-                page.wait_for_timeout(300)
-
-                # FULL PAGE SCREENSHOT
-                full_filename = f"{safe_region}-full.jpg"
-                page.screenshot(path=full_filename, full_page=True, type="jpeg", quality=85)
-                h_future = upload_executor.submit(background_upload, full_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
+                # HEADER
+                header_filename = f"{safe_region}-header.jpg"
+                page.screenshot(path=header_filename, clip=layout_info['headerClip'], type="jpeg", quality=85)
+                h_future = upload_executor.submit(background_upload, header_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
                 img_counter += 1
 
                 region_entry = {
                     "region": region,
                     "h_future": h_future,
-                    "c_future": h_future,
                     "date": capture_date,
                     "header_id": header_title_clean,
-                    "local_header": full_filename,
-                    "local_content": full_filename,
+                    "local_header": header_filename,
                     "tab_url": specific_tab_url,
                     "in_progress_futures": [],
                     "completed_futures": []
@@ -216,17 +200,17 @@ def capture_regional_images(target_url):
                             }}
                         """)
                         if not gal_info: break
-
+                        
                         page.mouse.wheel(0, gal_info['y'] - 100)
                         page.wait_for_timeout(300)
 
                         gal_prefix = "prog" if future_key == "in_progress_futures" else "comp"
                         gal_filename = f"{safe_region}-{gal_prefix}-{page_idx}.jpg"
                         page.screenshot(path=gal_filename, clip=gal_info, type="jpeg", quality=85)
-
+                        
                         g_future = upload_executor.submit(background_upload, gal_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
                         region_entry[future_key].append({"local": gal_filename, "future": g_future})
-
+                        
                         img_counter += 1
                         page_idx += 1
 
@@ -238,6 +222,15 @@ def capture_regional_images(target_url):
                         if page_idx > 5: break
 
                 capture_paged_gallery("Tickets in Progress", "in_progress_futures")
+
+                # CHARTS
+                content_filename = f"{safe_region}-content.jpg"
+                page.screenshot(path=content_filename, clip=layout_info['contentClip'], type="jpeg", quality=85)
+                c_future = upload_executor.submit(background_upload, content_filename, f"{safe_region}-{filename_week}-image{img_counter}-{safe_date}")
+                region_entry["c_future"] = c_future
+                region_entry["local_content"] = content_filename
+                img_counter += 1
+
                 capture_paged_gallery("Completed Ticket Gallery", "completed_futures")
 
                 captured_data.append(region_entry)
@@ -277,7 +270,7 @@ def sync_to_airtable(data_list):
         fields = {
             "Type": record_type, 
             "Date": item["date"], 
-            "URL": item["tab_url"],  # Map the specific deep-link URL here
+            "URL": item["tab_url"],
             "Attachments": record_attachments,
             "Header": item["header_url"], 
             "Charts": item["content_url"]
