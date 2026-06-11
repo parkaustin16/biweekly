@@ -52,7 +52,7 @@ def background_upload(file_path, public_id):
     return cloudinary.uploader.upload(file_path, folder="airtableautomation", public_id=public_id)
 
 def capture_regional_images(target_url):
-    regions = ["Asia", "EU", "LATAM", "Canada", "MEA", "All Regions"]
+    regions = ["Asia", "Europe", "LATAM", "Canada", "MEA", "All Regions"]
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
     header_title_clean = "Report"
@@ -232,7 +232,7 @@ def capture_regional_images(target_url):
 
                         next_btn = page.locator(f'[aria-label*="{gallery_label}"] div[role="button"]:has(path[d*="m4.64.17"])').first
                         if next_btn.is_visible() and not next_btn.evaluate("el => el.getAttribute('aria-disabled') === 'true'"):
-                            next_btn.click()
+                            next_btn.evaluate("el => el.click()")  # JS click bypasses overlay interception
                             page.wait_for_timeout(400)
                         else: break
                         if page_idx > 5: break
