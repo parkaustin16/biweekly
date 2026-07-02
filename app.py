@@ -307,7 +307,7 @@ def sync_to_airtable(data_list):
     st.session_state.capture_results = None
 
 def capture_creativehub_reports():
-    """Captures a full-page screenshot for each tab on the CreativeHub Reports site."""
+    """Captures each section of the AX4 site per tab on the CreativeHub Reports page."""
     captured_data = []
     capture_date = datetime.now().strftime("%Y-%m-%d")
     safe_date = capture_date.replace('-', '')
@@ -321,7 +321,7 @@ def capture_creativehub_reports():
         page = context.new_page()
 
         conn_status = st.empty()
-        conn_status.info("🔗 Connecting to CreativeHub Reports...")
+        conn_status.info("🔗 Connecting to AX4 CreativeHub Reports...")
         page.goto(CREATIVEHUB_URL, wait_until="domcontentloaded", timeout=30000)
         try:
             page.wait_for_load_state("networkidle", timeout=10000)
@@ -342,14 +342,13 @@ def capture_creativehub_reports():
         except Exception:
             pass
 
-        conn_status.success("✅ Connected to CreativeHub Reports")
+        conn_status.success("✅ Connected to AX4 CreativeHub Reports")
 
         for tab_name in CREATIVEHUB_TABS:
             tab_status = st.empty()
-            tab_status.write(f"🔄 **{tab_name}**: Capturing...")
+            tab_status.write(f"🔄 **{tab_name}**: Capturing sections...")
             try:
-                # Wait until nav tabs are actually rendered before clicking.
-                # "Skip to main content" appearing alone means JS hasn't run yet.
+                # Wait until nav tabs are rendered
                 try:
                     page.wait_for_function(
                         """() => {
@@ -411,9 +410,9 @@ def capture_creativehub_reports():
 
                 tab_url = page.url
                 safe_tab = tab_name.replace(' ', '-')
-                filename = f"ch-{safe_tab}-{safe_date}.jpg"
+                img_counter = 1
 
-                # Extract the active week label from the highlighted week button.
+                # Extract the active week label
                 week_label = page.evaluate("""() => {
                     const urlMatch = window.location.pathname.match(/(\\d{1,2}-\\d{1,2})\\/?$/);
                     if (urlMatch) return 'W' + urlMatch[1];
@@ -430,7 +429,7 @@ def capture_creativehub_reports():
                     return '';
                 }""")
 
-                # Step 1: find the inner scroller and scroll to trigger lazy image loading
+                # Scroll to trigger lazy image loading
                 page.evaluate("""() => {
                     const scroller = Array.from(document.querySelectorAll('*')).find(el => {
                         if (el === document.body || el === document.documentElement) return false;
@@ -445,7 +444,7 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 2: force all images eager
+                # Force all images eager
                 page.evaluate("""() => {
                     document.querySelectorAll('img').forEach(img => {
                         img.loading = 'eager';
@@ -455,8 +454,7 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Step 3: unlock the scroller so the full content height is
-                # reachable by full_page screenshot (no viewport resize needed).
+                # Unlock the scroller so full_page screenshot reaches all content
                 page.evaluate("""() => {
                     const scroller = window.__ch_scroller;
                     if (scroller) {
@@ -483,7 +481,7 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(500)
 
-                # Hide the floating nav panel via injected CSS (most reliable approach).
+                # Hide the floating nav panel
                 page.evaluate("""() => {
                     const style = document.createElement('style');
                     style.textContent = `
@@ -494,49 +492,142 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(200)
 
-                # Step 4: measure crop bounds after layout has settled.
-                # Use textContent (not innerText) — innerText applies CSS text-transform
-                # so 'uppercase' class would return 'D2C CREATIVE HUB', not matching.
-                coords = page.evaluate("""() => {
-                    const gallery = document.querySelector('section#gallery');
-                    let startY = 0;
-                    for (const p of document.querySelectorAll('p')) {
-                        if ((p.textContent || '').trim() === 'D2C Creative Hub') {
-                            startY = Math.max(0, Math.round(p.getBoundingClientRect().top));
-                            break;
-                        }
-                    }
-                    const endY = gallery
-                        ? Math.round(gallery.getBoundingClientRect().bottom) + 24
-                        : document.documentElement.scrollHeight;
-                    return {startY, endY};
-                }""")
+                dpr = 2
+                # Panel is position:fixed; right:20px; width:172px
+                right_px = 1920 * dpr - ((20 + 172) * dpr)
 
-                # Step 5: full_page PNG captures all content regardless of viewport,
-                # then Pillow crops precisely to [startY, endY].
-                dpr = 2  # device_scale_factor
-                png_bytes = page.screenshot(full_page=True, type="png")
-                img = Image.open(io.BytesIO(png_bytes))
-                top_px = max(0, coords['startY'] * dpr)
-                bot_px = min(img.height, coords['endY'] * dpr)
-                # Panel is position:fixed; right:20px; width:172px — left edge is always
-                # viewport_width - 20 - 172 = 1728 CSS px = 3456 retina px.
-                right_px = img.width - ((20 + 172) * dpr)
-                img.crop((0, top_px, right_px, bot_px)).save(filename, "JPEG", quality=85)
-
-                future = upload_executor.submit(
-                    background_upload, filename,
-                    f"creativehub-{safe_tab}-{safe_date}"
-                )
-                captured_data.append({
+                tab_entry = {
                     "tab": tab_name,
                     "date": capture_date,
                     "tab_url": tab_url,
                     "week": week_label,
-                    "local": filename,
-                    "future": future,
-                })
-                tab_status.write(f"✅ **{tab_name}** captured")
+                    "sections": []
+                }
+
+                def capture_section(section_label, pub_suffix):
+                    nonlocal img_counter
+                    clip = page.evaluate(f"""() => {{
+                        const label = '{section_label}';
+                        const all = Array.from(document.querySelectorAll('*'));
+                        let heading = null;
+                        for (const el of all) {{
+                            if (!el.children.length || el.children.length <= 2) {{
+                                const t = (el.textContent || '').trim();
+                                if (t === label || t.startsWith(label + ' ') || t.startsWith(label + ':')) {{
+                                    heading = el;
+                                    break;
+                                }}
+                            }}
+                        }}
+                        if (!heading) return null;
+                        let container = heading;
+                        for (let i = 0; i < 8; i++) {{
+                            const p = container.parentElement;
+                            if (!p || p === document.body || p === document.documentElement) break;
+                            const r = p.getBoundingClientRect();
+                            if (r.height > heading.getBoundingClientRect().height * 3) break;
+                            container = p;
+                        }}
+                        const rect = container.getBoundingClientRect();
+                        return {{
+                            y: Math.max(0, Math.floor(rect.top)),
+                            height: Math.ceil(rect.height) + 24
+                        }};
+                    }}""")
+                    if not clip:
+                        return None
+                    fname = f"ch-{safe_tab}-{pub_suffix}-{safe_date}.jpg"
+                    png_bytes = page.screenshot(full_page=True, type="png")
+                    img = Image.open(io.BytesIO(png_bytes))
+                    top_px = max(0, clip['y'] * dpr)
+                    bot_px = min(img.height, (clip['y'] + clip['height']) * dpr)
+                    img.crop((0, top_px, right_px, bot_px)).save(fname, "JPEG", quality=85)
+                    future = upload_executor.submit(
+                        background_upload, fname,
+                        f"creativehub-{safe_tab}-{pub_suffix}-{safe_date}"
+                    )
+                    img_counter += 1
+                    return {"label": section_label, "local": fname, "future": future}
+
+                def capture_ch_gallery(gallery_label, pub_prefix):
+                    nonlocal img_counter
+                    page_idx = 1
+                    while True:
+                        gal_clip = page.evaluate(f"""() => {{
+                            const label = '{gallery_label}';
+                            const all = Array.from(document.querySelectorAll('*'));
+                            let container = null;
+                            for (const el of all) {{
+                                const t = (el.textContent || '').trim();
+                                if ((t === label || t.startsWith(label + ' ') || t.startsWith(label + ':'))
+                                        && el.children.length >= 1) {{
+                                    container = el;
+                                    break;
+                                }}
+                            }}
+                            if (!container) return null;
+                            const rect = container.getBoundingClientRect();
+                            return {{
+                                y: Math.max(0, Math.floor(rect.top) - 10),
+                                height: Math.ceil(rect.height) + 20
+                            }};
+                        }}""")
+                        if not gal_clip:
+                            break
+                        fname = f"ch-{safe_tab}-{pub_prefix}-p{page_idx}-{safe_date}.jpg"
+                        png_bytes = page.screenshot(full_page=True, type="png")
+                        img = Image.open(io.BytesIO(png_bytes))
+                        top_px = max(0, gal_clip['y'] * dpr)
+                        bot_px = min(img.height, (gal_clip['y'] + gal_clip['height']) * dpr)
+                        img.crop((0, top_px, right_px, bot_px)).save(fname, "JPEG", quality=85)
+                        future = upload_executor.submit(
+                            background_upload, fname,
+                            f"creativehub-{safe_tab}-{pub_prefix}-p{page_idx}-{safe_date}"
+                        )
+                        tab_entry["sections"].append({
+                            "label": f"{gallery_label} (p{page_idx})",
+                            "local": fname,
+                            "future": future
+                        })
+                        img_counter += 1
+                        page_idx += 1
+                        advanced = page.evaluate(f"""() => {{
+                            const label = '{gallery_label}';
+                            const all = Array.from(document.querySelectorAll('*'));
+                            let container = null;
+                            for (const el of all) {{
+                                const t = (el.textContent || '').trim();
+                                if ((t === label || t.startsWith(label + ' ') || t.startsWith(label + ':'))
+                                        && el.children.length >= 1) {{
+                                    container = el;
+                                    break;
+                                }}
+                            }}
+                            if (!container) return false;
+                            const btns = Array.from(container.querySelectorAll('button, [role="button"]'));
+                            const nextBtn = btns.find(b => b.getAttribute('aria-disabled') !== 'true'
+                                && b.querySelector('svg, path'));
+                            if (nextBtn) {{ nextBtn.click(); return true; }}
+                            return false;
+                        }}""")
+                        if not advanced or page_idx > 5:
+                            break
+                        page.wait_for_timeout(400)
+
+                # Capture each section in order
+                for sec_label, pub_suffix in [
+                    ("Header", "header"),
+                    ("Key Updates & Highlights", "key-updates"),
+                ]:
+                    result = capture_section(sec_label, pub_suffix)
+                    if result:
+                        tab_entry["sections"].append(result)
+
+                capture_ch_gallery("Tickets in Progress", "tickets")
+                capture_ch_gallery("Completed Gallery", "gallery")
+
+                captured_data.append(tab_entry)
+                tab_status.write(f"✅ **{tab_name}** sections captured")
             except Exception as e:
                 st.error(f"Error on {tab_name}: {e}")
 
@@ -544,14 +635,18 @@ def capture_creativehub_reports():
 
     final_data = []
     for item in captured_data:
-        item["url"] = item.pop("future").result()["secure_url"]
+        resolved_sections = []
+        for sec in item["sections"]:
+            sec["url"] = sec.pop("future").result()["secure_url"]
+            resolved_sections.append(sec)
+        item["sections"] = resolved_sections
         final_data.append(item)
 
     return final_data
 
 
 def sync_creativehub_to_airtable(data_list):
-    """Sends CreativeHub full-page captures to Airtable."""
+    """Sends CreativeHub section captures to Airtable."""
     table_name = st.secrets.get("CH_TABLE_NAME", st.secrets["TABLE_NAME"])
     url = f"https://api.airtable.com/v0/{st.secrets['BASE_ID']}/{table_name}"
     headers = {"Authorization": f"Bearer {st.secrets['AIRTABLE_TOKEN']}", "Content-Type": "application/json"}
@@ -566,13 +661,19 @@ def sync_creativehub_to_airtable(data_list):
             week_match = re.search(r'(\d{1,2}-\d{1,2})\/?$', item.get('tab_url', ''))
             week = f"W{week_match.group(1)}" if week_match else ""
         label = f"{week} | Bi Weekly Report | {item['tab']}" if week else f"Bi Weekly Report | {item['tab']}"
+        sections = item.get("sections", [])
+        attachments = [{"url": sec["url"]} for sec in sections]
+        header_url = next((s["url"] for s in sections if s.get("label") == "Header"), sections[0]["url"] if sections else "")
+        charts_url = next((s["url"] for s in sections if s.get("label") == "Key Updates & Highlights"), "")
         fields = {
             "Type": label,
             "Date": item["date"],
             "URL": item["tab_url"],
-            "Attachments": [{"url": item["url"]}],
-            "Header": item["url"],
+            "Attachments": attachments,
+            "Header": header_url,
         }
+        if charts_url:
+            fields["Charts"] = charts_url
         records_to_create.append({"fields": fields})
 
     for i in range(0, len(records_to_create), 10):
@@ -663,6 +764,7 @@ if st.session_state.ch_results:
             st.subheader(item['tab'])
             st.caption(f"[Tab Link]({item['tab_url']})")
             html_parts = [f'<div class="preview-container" id="ch-container-{idx}">']
-            html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(item["local"])}" />')
+            for sec in item.get("sections", []):
+                html_parts.append(f'<img src="data:image/jpeg;base64,{get_base64_image(sec["local"])}" />')
             html_parts.append('</div>')
             st.markdown("".join(html_parts), unsafe_allow_html=True)
