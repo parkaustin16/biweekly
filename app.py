@@ -502,11 +502,29 @@ def capture_creativehub_reports():
 
                 def capture_section(selector, section_label, pub_suffix):
                     nonlocal img_counter
-                    locator = page.locator(selector)
-                    if not locator.count():
+                    bounds = page.evaluate(f"""() => {{
+                        const el = document.querySelector('{selector}');
+                        if (!el) return null;
+                        const rect = el.getBoundingClientRect();
+                        const pb = parseFloat(window.getComputedStyle(el).paddingBottom) || 0;
+                        return {{
+                            x: rect.left + window.scrollX,
+                            y: rect.top  + window.scrollY,
+                            width:  rect.width,
+                            height: rect.height - pb
+                        }};
+                    }}""")
+                    if not bounds:
                         return None
                     fname = f"ch-{safe_tab}-{pub_suffix}-{safe_date}.jpg"
-                    locator.screenshot(path=fname, type="jpeg", quality=85)
+                    page.screenshot(
+                        path=fname,
+                        clip={"x": bounds['x'], "y": bounds['y'],
+                              "width": bounds['width'], "height": bounds['height']},
+                        full_page=True,
+                        type="jpeg",
+                        quality=85
+                    )
                     future = upload_executor.submit(
                         background_upload, fname,
                         f"creativehub-{safe_tab}-{pub_suffix}-{safe_date}"
