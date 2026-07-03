@@ -511,8 +511,10 @@ def capture_creativehub_reports():
                         if (!el) return null;
                         const rect = el.getBoundingClientRect();
                         return {{
+                            x: Math.max(0, Math.floor(rect.left)),
                             y: Math.max(0, Math.floor(rect.top)),
-                            height: Math.ceil(rect.height) + 24
+                            width: Math.ceil(rect.width),
+                            height: Math.ceil(rect.height)
                         }};
                     }}""")
                     if not clip:
@@ -520,9 +522,11 @@ def capture_creativehub_reports():
                     fname = f"ch-{safe_tab}-{pub_suffix}-{safe_date}.jpg"
                     png_bytes = page.screenshot(full_page=True, type="png")
                     img = Image.open(io.BytesIO(png_bytes))
-                    top_px = max(0, clip['y'] * dpr)
-                    bot_px = min(img.height, (clip['y'] + clip['height']) * dpr)
-                    img.crop((0, top_px, right_px, bot_px)).save(fname, "JPEG", quality=85)
+                    left_px  = clip['x'] * dpr
+                    top_px   = clip['y'] * dpr
+                    right_px = min(img.width,  (clip['x'] + clip['width'])  * dpr)
+                    bot_px   = min(img.height, (clip['y'] + clip['height']) * dpr)
+                    img.crop((left_px, top_px, right_px, bot_px)).save(fname, "JPEG", quality=85)
                     future = upload_executor.submit(
                         background_upload, fname,
                         f"creativehub-{safe_tab}-{pub_suffix}-{safe_date}"
