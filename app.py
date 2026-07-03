@@ -10,7 +10,7 @@ import base64
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 from concurrent.futures import ThreadPoolExecutor
-from PIL import Image
+from PIL import Image, ImageChops
 
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
@@ -484,53 +484,33 @@ def capture_creativehub_reports():
                     locator = page.locator(selector)
                     if not locator.count():
                         return None
-                    # Bring the element into the viewport so getBoundingClientRect is live
                     locator.scroll_into_view_if_needed()
-                    page.wait_for_timeout(200)
-                    bounds = page.evaluate(f"""() => {{
-                        const el = document.querySelector('{selector}');
-                        if (!el) return null;
-                        const sr = el.getBoundingClientRect();
-                        const cs = window.getComputedStyle(el);
-                        const pt = parseFloat(cs.paddingTop)    || 0;
-                        const pb = parseFloat(cs.paddingBottom) || 0;
-                        const pl = parseFloat(cs.paddingLeft)   || 0;
-                        const pr = parseFloat(cs.paddingRight)  || 0;
+                    page.wait_for_timeout(300)
 
-                        // Walk all descendants; skip full-width containers to find
-                        // the actual rightmost and bottommost content element.
-                        const threshold = sr.width * 0.85;
-                        let maxRight  = sr.left + pl;
-                        let maxBottom = sr.top  + pt;
-                        for (const d of el.querySelectorAll('*')) {{
-                            const r = d.getBoundingClientRect();
-                            if (r.width === 0 || r.height === 0) continue;
-                            if (r.width < threshold) {{
-                                maxRight = Math.max(maxRight, r.right);
-                            }}
-                            maxBottom = Math.max(maxBottom, r.bottom);
-                        }}
-
-                        const cropRight  = Math.min(sr.right,  maxRight  + pr);
-                        const cropBottom = Math.min(sr.bottom - pb, maxBottom);
-                        return {{
-                            x: sr.left,
-                            y: sr.top,
-                            width:  cropRight  - sr.left,
-                            height: cropBottom - sr.top
-                        }};
-                    }}""")
-                    if not bounds:
-                        return None
                     fname = f"ch-{safe_tab}-{pub_suffix}-{safe_date}.jpg"
-                    # No full_page — element is in viewport; coords are viewport-relative
-                    page.screenshot(
-                        path=fname,
-                        clip={"x": bounds['x'], "y": bounds['y'],
-                              "width": bounds['width'], "height": bounds['height']},
-                        type="jpeg",
-                        quality=85
-                    )
+                    png_bytes = locator.screenshot(type="png")
+                    img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+
+                    # Content-aware crop: the section background gradient is
+                    # approximately rgb(242, 238, 228). Content cards are white
+                    # (rgb 255,255,255). Diff against a solid beige to find
+                    # where real content lives, then crop tight to that bbox.
+                    bg = Image.new("RGB", img.size, (242, 238, 228))
+                    diff = ImageChops.difference(img, bg)
+                    # Threshold each channel — white differs by ~27 in blue
+                    mask = diff.point(lambda x: 255 if x > 18 else 0)
+                    bbox = mask.getbbox()
+                    if bbox:
+                        l, t, r, b = bbox
+                        pad = 20  # physical pixels of breathing room
+                        img = img.crop((
+                            max(0, l - pad),
+                            max(0, t - pad),
+                            min(img.width,  r + pad),
+                            min(img.height, b + pad),
+                        ))
+
+                    img.save(fname, "JPEG", quality=85)
                     future = upload_executor.submit(
                         background_upload, fname,
                         f"creativehub-{safe_tab}-{pub_suffix}-{safe_date}"
