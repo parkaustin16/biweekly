@@ -490,13 +490,34 @@ def capture_creativehub_reports():
                     bounds = page.evaluate(f"""() => {{
                         const el = document.querySelector('{selector}');
                         if (!el) return null;
-                        const rect = el.getBoundingClientRect();
-                        const pb = parseFloat(window.getComputedStyle(el).paddingBottom) || 0;
+                        const sr = el.getBoundingClientRect();
+                        const cs = window.getComputedStyle(el);
+                        const pt = parseFloat(cs.paddingTop)    || 0;
+                        const pb = parseFloat(cs.paddingBottom) || 0;
+                        const pl = parseFloat(cs.paddingLeft)   || 0;
+                        const pr = parseFloat(cs.paddingRight)  || 0;
+
+                        // Walk all descendants; skip full-width containers to find
+                        // the actual rightmost and bottommost content element.
+                        const threshold = sr.width * 0.85;
+                        let maxRight  = sr.left + pl;
+                        let maxBottom = sr.top  + pt;
+                        for (const d of el.querySelectorAll('*')) {{
+                            const r = d.getBoundingClientRect();
+                            if (r.width === 0 || r.height === 0) continue;
+                            if (r.width < threshold) {{
+                                maxRight = Math.max(maxRight, r.right);
+                            }}
+                            maxBottom = Math.max(maxBottom, r.bottom);
+                        }}
+
+                        const cropRight  = Math.min(sr.right,  maxRight  + pr);
+                        const cropBottom = Math.min(sr.bottom - pb, maxBottom);
                         return {{
-                            x: rect.left,
-                            y: rect.top,
-                            width:  rect.width,
-                            height: rect.height - pb
+                            x: sr.left,
+                            y: sr.top,
+                            width:  cropRight  - sr.left,
+                            height: cropBottom - sr.top
                         }};
                     }}""")
                     if not bounds:
