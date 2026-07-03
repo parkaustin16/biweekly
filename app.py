@@ -10,7 +10,7 @@ import base64
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 from concurrent.futures import ThreadPoolExecutor
-from PIL import Image, ImageChops
+from PIL import Image
 
 # --- 1. CLOUD ENVIRONMENT SETUP ---
 @st.cache_resource
@@ -487,28 +487,49 @@ def capture_creativehub_reports():
                     locator.scroll_into_view_if_needed()
                     page.wait_for_timeout(300)
 
+                    # Compute crop dimensions relative to the section's own
+                    # top-left corner (CSS px). We look at the direct children
+                    # of the inner CSS grid — those are the actual cards — and
+                    # find the rightmost/bottommost visible one.
+                    crop = page.evaluate(f"""() => {{
+                        const section = document.querySelector('{selector}');
+                        if (!section) return null;
+                        const sr  = section.getBoundingClientRect();
+                        const cs  = window.getComputedStyle(section);
+                        const pb  = parseFloat(cs.paddingBottom) || 0;
+                        const pr  = parseFloat(cs.paddingRight)  || 0;
+
+                        const grid = Array.from(section.children).find(
+                            el => el.classList && el.classList.contains('grid')
+                        );
+                        if (!grid) return {{ w: sr.width, h: sr.height - pb }};
+
+                        let maxRelRight  = 0;
+                        let maxRelBottom = 0;
+                        for (const child of grid.children) {{
+                            const r = child.getBoundingClientRect();
+                            if (r.width > 0 && r.height > 0) {{
+                                maxRelRight  = Math.max(maxRelRight,  r.right  - sr.left);
+                                maxRelBottom = Math.max(maxRelBottom, r.bottom - sr.top);
+                            }}
+                        }}
+                        if (maxRelRight === 0) return {{ w: sr.width, h: sr.height - pb }};
+                        return {{
+                            w: Math.min(sr.width,  maxRelRight  + pr),
+                            h: Math.min(sr.height, maxRelBottom)
+                        }};
+                    }}""")
+
                     fname = f"ch-{safe_tab}-{pub_suffix}-{safe_date}.jpg"
+                    # locator.screenshot captures exactly the element bounds
                     png_bytes = locator.screenshot(type="png")
                     img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
 
-                    # Content-aware crop: the section background gradient is
-                    # approximately rgb(242, 238, 228). Content cards are white
-                    # (rgb 255,255,255). Diff against a solid beige to find
-                    # where real content lives, then crop tight to that bbox.
-                    bg = Image.new("RGB", img.size, (242, 238, 228))
-                    diff = ImageChops.difference(img, bg)
-                    # Threshold each channel — white differs by ~27 in blue
-                    mask = diff.point(lambda x: 255 if x > 18 else 0)
-                    bbox = mask.getbbox()
-                    if bbox:
-                        l, t, r, b = bbox
-                        pad = 20  # physical pixels of breathing room
-                        img = img.crop((
-                            max(0, l - pad),
-                            max(0, t - pad),
-                            min(img.width,  r + pad),
-                            min(img.height, b + pad),
-                        ))
+                    if crop:
+                        dpr = 2  # matches browser context device_scale_factor
+                        crop_w = min(img.width,  round(crop['w'] * dpr))
+                        crop_h = min(img.height, round(crop['h'] * dpr))
+                        img = img.crop((0, 0, crop_w, crop_h))
 
                     img.save(fname, "JPEG", quality=85)
                     future = upload_executor.submit(
