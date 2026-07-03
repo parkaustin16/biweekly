@@ -504,31 +504,12 @@ def capture_creativehub_reports():
                     "sections": []
                 }
 
-                def capture_section(section_label, pub_suffix):
+                def capture_section(selector, section_label, pub_suffix):
                     nonlocal img_counter
                     clip = page.evaluate(f"""() => {{
-                        const label = '{section_label}';
-                        const all = Array.from(document.querySelectorAll('*'));
-                        let heading = null;
-                        for (const el of all) {{
-                            if (!el.children.length || el.children.length <= 2) {{
-                                const t = (el.textContent || '').trim();
-                                if (t === label || t.startsWith(label + ' ') || t.startsWith(label + ':')) {{
-                                    heading = el;
-                                    break;
-                                }}
-                            }}
-                        }}
-                        if (!heading) return null;
-                        let container = heading;
-                        for (let i = 0; i < 8; i++) {{
-                            const p = container.parentElement;
-                            if (!p || p === document.body || p === document.documentElement) break;
-                            const r = p.getBoundingClientRect();
-                            if (r.height > heading.getBoundingClientRect().height * 3) break;
-                            container = p;
-                        }}
-                        const rect = container.getBoundingClientRect();
+                        const el = document.querySelector('{selector}');
+                        if (!el) return null;
+                        const rect = el.getBoundingClientRect();
                         return {{
                             y: Math.max(0, Math.floor(rect.top)),
                             height: Math.ceil(rect.height) + 24
@@ -549,82 +530,16 @@ def capture_creativehub_reports():
                     img_counter += 1
                     return {"label": section_label, "local": fname, "future": future}
 
-                def capture_ch_gallery(gallery_label, pub_prefix):
-                    nonlocal img_counter
-                    page_idx = 1
-                    while True:
-                        gal_clip = page.evaluate(f"""() => {{
-                            const label = '{gallery_label}';
-                            const all = Array.from(document.querySelectorAll('*'));
-                            let container = null;
-                            for (const el of all) {{
-                                const t = (el.textContent || '').trim();
-                                if ((t === label || t.startsWith(label + ' ') || t.startsWith(label + ':'))
-                                        && el.children.length >= 1) {{
-                                    container = el;
-                                    break;
-                                }}
-                            }}
-                            if (!container) return null;
-                            const rect = container.getBoundingClientRect();
-                            return {{
-                                y: Math.max(0, Math.floor(rect.top) - 10),
-                                height: Math.ceil(rect.height) + 20
-                            }};
-                        }}""")
-                        if not gal_clip:
-                            break
-                        fname = f"ch-{safe_tab}-{pub_prefix}-p{page_idx}-{safe_date}.jpg"
-                        png_bytes = page.screenshot(full_page=True, type="png")
-                        img = Image.open(io.BytesIO(png_bytes))
-                        top_px = max(0, gal_clip['y'] * dpr)
-                        bot_px = min(img.height, (gal_clip['y'] + gal_clip['height']) * dpr)
-                        img.crop((0, top_px, right_px, bot_px)).save(fname, "JPEG", quality=85)
-                        future = upload_executor.submit(
-                            background_upload, fname,
-                            f"creativehub-{safe_tab}-{pub_prefix}-p{page_idx}-{safe_date}"
-                        )
-                        tab_entry["sections"].append({
-                            "label": f"{gallery_label} (p{page_idx})",
-                            "local": fname,
-                            "future": future
-                        })
-                        img_counter += 1
-                        page_idx += 1
-                        advanced = page.evaluate(f"""() => {{
-                            const label = '{gallery_label}';
-                            const all = Array.from(document.querySelectorAll('*'));
-                            let container = null;
-                            for (const el of all) {{
-                                const t = (el.textContent || '').trim();
-                                if ((t === label || t.startsWith(label + ' ') || t.startsWith(label + ':'))
-                                        && el.children.length >= 1) {{
-                                    container = el;
-                                    break;
-                                }}
-                            }}
-                            if (!container) return false;
-                            const btns = Array.from(container.querySelectorAll('button, [role="button"]'));
-                            const nextBtn = btns.find(b => b.getAttribute('aria-disabled') !== 'true'
-                                && b.querySelector('svg, path'));
-                            if (nextBtn) {{ nextBtn.click(); return true; }}
-                            return false;
-                        }}""")
-                        if not advanced or page_idx > 5:
-                            break
-                        page.wait_for_timeout(400)
-
-                # Capture each section in order
-                for sec_label, pub_suffix in [
-                    ("Header", "header"),
-                    ("Key Updates & Highlights", "key-updates"),
+                # Capture each section using its known CSS selector
+                for selector, sec_label, pub_suffix in [
+                    ("section#hero",    "Recent Highlights", "hero"),
+                    ("section#summary", "Request Summary",   "summary"),
+                    ("section#ongoing", "Ongoing Requests",  "ongoing"),
+                    ("section#gallery", "Completed Gallery", "gallery"),
                 ]:
-                    result = capture_section(sec_label, pub_suffix)
+                    result = capture_section(selector, sec_label, pub_suffix)
                     if result:
                         tab_entry["sections"].append(result)
-
-                capture_ch_gallery("Tickets in Progress", "tickets")
-                capture_ch_gallery("Completed Gallery", "gallery")
 
                 captured_data.append(tab_entry)
                 tab_status.write(f"✅ **{tab_name}** sections captured")
