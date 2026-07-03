@@ -454,32 +454,11 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(800)
 
-                # Unlock the scroller so full_page screenshot reaches all content
+                # Reset scroller to top (leave overflow intact — no layout mutations)
                 page.evaluate("""() => {
-                    const scroller = window.__ch_scroller;
-                    if (scroller) {
-                        scroller.scrollTop = 0;
-                        scroller.style.setProperty('overflow', 'visible', 'important');
-                        scroller.style.setProperty('overflow-y', 'visible', 'important');
-                        scroller.style.setProperty('height', 'auto', 'important');
-                        scroller.style.setProperty('max-height', 'none', 'important');
-                        scroller.style.setProperty('min-height', '0', 'important');
-                        let el = scroller.parentElement;
-                        while (el && el !== document.documentElement) {
-                            el.style.setProperty('height', 'auto', 'important');
-                            el.style.setProperty('max-height', 'none', 'important');
-                            el.style.setProperty('overflow', 'visible', 'important');
-                            el = el.parentElement;
-                        }
-                    }
-                    document.body.style.setProperty('height', 'auto', 'important');
-                    document.body.style.setProperty('max-height', 'none', 'important');
-                    document.body.style.setProperty('overflow', 'visible', 'important');
-                    document.documentElement.style.setProperty('height', 'auto', 'important');
-                    document.documentElement.style.setProperty('max-height', 'none', 'important');
-                    document.documentElement.style.setProperty('overflow', 'visible', 'important');
+                    if (window.__ch_scroller) window.__ch_scroller.scrollTop = 0;
                 }""")
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(300)
 
                 # Hide the floating nav panel
                 page.evaluate("""() => {
@@ -502,14 +481,20 @@ def capture_creativehub_reports():
 
                 def capture_section(selector, section_label, pub_suffix):
                     nonlocal img_counter
+                    locator = page.locator(selector)
+                    if not locator.count():
+                        return None
+                    # Bring the element into the viewport so getBoundingClientRect is live
+                    locator.scroll_into_view_if_needed()
+                    page.wait_for_timeout(200)
                     bounds = page.evaluate(f"""() => {{
                         const el = document.querySelector('{selector}');
                         if (!el) return null;
                         const rect = el.getBoundingClientRect();
                         const pb = parseFloat(window.getComputedStyle(el).paddingBottom) || 0;
                         return {{
-                            x: rect.left + window.scrollX,
-                            y: rect.top  + window.scrollY,
+                            x: rect.left,
+                            y: rect.top,
                             width:  rect.width,
                             height: rect.height - pb
                         }};
@@ -517,11 +502,11 @@ def capture_creativehub_reports():
                     if not bounds:
                         return None
                     fname = f"ch-{safe_tab}-{pub_suffix}-{safe_date}.jpg"
+                    # No full_page — element is in viewport; coords are viewport-relative
                     page.screenshot(
                         path=fname,
                         clip={"x": bounds['x'], "y": bounds['y'],
                               "width": bounds['width'], "height": bounds['height']},
-                        full_page=True,
                         type="jpeg",
                         quality=85
                     )
