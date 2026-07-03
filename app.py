@@ -492,10 +492,6 @@ def capture_creativehub_reports():
                 }""")
                 page.wait_for_timeout(200)
 
-                dpr = 2
-                # Panel is position:fixed; right:20px; width:172px
-                right_px = 1920 * dpr - ((20 + 172) * dpr)
-
                 tab_entry = {
                     "tab": tab_name,
                     "date": capture_date,
@@ -506,27 +502,11 @@ def capture_creativehub_reports():
 
                 def capture_section(selector, section_label, pub_suffix):
                     nonlocal img_counter
-                    clip = page.evaluate(f"""() => {{
-                        const el = document.querySelector('{selector}');
-                        if (!el) return null;
-                        const rect = el.getBoundingClientRect();
-                        return {{
-                            x: Math.max(0, Math.floor(rect.left)),
-                            y: Math.max(0, Math.floor(rect.top)),
-                            width: Math.ceil(rect.width),
-                            height: Math.ceil(rect.height)
-                        }};
-                    }}""")
-                    if not clip:
+                    locator = page.locator(selector)
+                    if not locator.count():
                         return None
                     fname = f"ch-{safe_tab}-{pub_suffix}-{safe_date}.jpg"
-                    png_bytes = page.screenshot(full_page=True, type="png")
-                    img = Image.open(io.BytesIO(png_bytes))
-                    left_px  = clip['x'] * dpr
-                    top_px   = clip['y'] * dpr
-                    right_px = min(img.width,  (clip['x'] + clip['width'])  * dpr)
-                    bot_px   = min(img.height, (clip['y'] + clip['height']) * dpr)
-                    img.crop((left_px, top_px, right_px, bot_px)).save(fname, "JPEG", quality=85)
+                    locator.screenshot(path=fname, type="jpeg", quality=85)
                     future = upload_executor.submit(
                         background_upload, fname,
                         f"creativehub-{safe_tab}-{pub_suffix}-{safe_date}"
